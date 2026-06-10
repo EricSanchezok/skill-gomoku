@@ -1,0 +1,53 @@
+# ============================================================
+# Skill-Gomoku 默认配置
+# ============================================================
+
+# 棋盘参数
+board:
+  rows: 15
+  cols: 15
+  # 每个格子的物理尺寸 (mm)，由机械臂四点标定反推
+  cell_size_mm: 22.0
+
+# 相机参数：RealSense 作为普通 UVC webcam 使用，只读取 RGB，不使用深度 SDK
+camera:
+  # OpenCV VideoCapture 设备编号；如果打开的是内置摄像头，尝试改成 1/2
+  device_index: 1
+  width: 1280
+  height: 720
+  fps: 30
+  warmup_frames: 5
+  enable_depth: false
+
+# 棋盘检测
+board_detection:
+  method: "edge"  # "edge": 纯图像处理，检测棋盘格线
+  canny_low: 50
+  canny_high: 150
+  hough_threshold: 100
+  min_line_length: 200
+  max_line_gap: 50
+
+# 棋子检测
+stone_detection:
+  # ROI 相对格子中心的半径比例 (0~0.5)
+  roi_ratio: 0.35
+  # 颜色分类阈值 (HSV)
+  black_v_max: 80
+  white_v_min: 150
+  # 空格的饱和度阈值 (低于此值判定为空)
+  empty_s_max: 30
+
+# 机械臂 (队友实现)
+robot:
+  port: "/dev/ttyUSB0"
+  baudrate: 115200
+  # 棋盘四角标定点 (机械臂坐标系, mm)
+  # 格式: [左上, 右上, 右下, 左下]
+  calibration_points: []
+
+# 游戏逻辑
+game:
+  # 我方棋子颜色
+  my_stone: "black"
+  ai_level: "basic"
