@@ -87,7 +87,7 @@ class GameOrchestrator:
         if winner != EMPTY:
             return winner
 
-        row, col = ai_decide(self.board, self.my_stone)
+        row, col = ai_decide(self.board.state, self.my_stone)
         target = board_to_robot_coords(
             row, col, self.board.rows, self.board.cols, self.calib, self.z_height
         )
