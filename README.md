@@ -26,6 +26,7 @@ skill-gomoku/
 │   └── default.yaml         # 标定角点、Hough 参数、时间控制
 ├── scripts/
 │   ├── calibrate_board.py   # 交互式棋盘四角标定
+│   ├── calibrate_robot_board.py # 手带机械臂记录棋盘四角
 │   └── test_perception.py   # 感知管线测试（mock / 真实相机）
 ├── src/
 │   ├── perception/
@@ -111,6 +112,40 @@ python scripts/calibrate_board.py
 ```
 
 按提示依次点击棋盘四个角：**左上 → 右上 → 右下 → 左下**，预览 warp 对齐效果后按 `Y` 保存。
+
+### 标定机械臂棋盘四角（建议每局开始前）
+
+如果棋盘位置每局会有轻微变化，可以在开局前释放 SO101 力矩，手动把机械臂末端带到棋盘四角并记录当前 LeRobot action 姿态：
+
+```bash
+conda run -n lerobot python scripts/calibrate_robot_board.py \
+  --backend so101 \
+  --config config/default.yaml \
+  --port /dev/tty.usbmodem5A4B0487101 \
+  --robot-id so101_follower_0610
+```
+
+记录顺序同样是 **左上 → 右上 → 右下 → 左下**。脚本会把结果写入 `robot.calibration.corners`，主流程用四角双线性插值把 `(row, col)` 转成机械臂目标姿态。没有硬件时可以用终端输入模式测试配置写入：
+
+```bash
+python scripts/calibrate_robot_board.py --backend input
+```
+
+在代码里也可以把标定直接接到开局流程：
+
+```python
+from src.robot.so101_adapter import SO101PoseSampler
+
+sampler = SO101PoseSampler(
+    port="/dev/tty.usbmodem5A4B0487101",
+    robot_id="so101_follower_0610",
+)
+orchestrator.start_new_game(
+    sampler=sampler,
+    calibrate_robot=True,
+    config_path="config/default.yaml",
+)
+```
 
 ### 测试感知管线
 

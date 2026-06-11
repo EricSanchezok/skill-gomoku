@@ -43,7 +43,15 @@ stone_detection:
 robot:
   port: /dev/ttyUSB0
   baudrate: 115200
+  id: so101_follower_0610
+  z_height: 50.0
+  calibrate_before_game: true
+  coordinate_space: lerobot_action
   calibration_points: []
+  calibration:
+    method: manual
+    coordinate_space: lerobot_action
+    corners: {}
 game:
   my_stone: black
   ai_level: basic
