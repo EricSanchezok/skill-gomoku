@@ -13,6 +13,11 @@ from src.robot.controller import (
     board_to_robot_coords,
     board_to_robot_pose,
 )
+from src.robot.so101_mover import (
+    ensure_action,
+    interpolate_action,
+    smoothstep,
+)
 from src.utils.constants import WHITE
 
 
@@ -120,3 +125,15 @@ def test_orchestrator_from_config_allows_required_startup_calibration() -> None:
     assert orchestrator.calib is None
     assert orchestrator.z_height == 12.0
     assert orchestrator.my_stone == WHITE
+
+
+def test_so101_action_helpers_validate_and_interpolate() -> None:
+    target = ensure_action({"shoulder_pan.pos": 10, "elbow_flex.pos": 20})
+    start = {"shoulder_pan.pos": 0.0, "elbow_flex.pos": 10.0}
+
+    assert smoothstep(0.0) == 0.0
+    assert smoothstep(1.0) == 1.0
+    assert interpolate_action(start, target, 0.5) == {
+        "shoulder_pan.pos": 5.0,
+        "elbow_flex.pos": 15.0,
+    }

@@ -36,7 +36,10 @@ skill-gomoku/
 │   │   ├── grid_mapper.py   # 像素 → 棋盘行列映射
 │   │   └── state_extractor.py # 完整管线入口 + 差异检测
 │   ├── robot/
-│   │   └── controller.py    # 机械臂控制骨架（队友实现）
+│   │   ├── controller.py    # 棋盘格 → 机械臂姿态映射
+│   │   ├── calibration.py   # 手带机械臂四角标定
+│   │   ├── so101_adapter.py # SO101 当前姿态读取
+│   │   └── so101_mover.py   # 已验证的 SO101 平滑移动工具
 │   ├── game/
 │   │   ├── board.py         # 15×15 棋盘状态 & 胜负判定
 │   │   └── ai.py            # Rapfi 引擎子进程封装 (Gomocup 协议)
@@ -146,6 +149,8 @@ orchestrator.start_new_game(
     config_path="config/default.yaml",
 )
 ```
+
+机器人控制、SO101 平滑移动工具和安全检查见 `docs/robot.md`。
 
 ### 测试感知管线
 
