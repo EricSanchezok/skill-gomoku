@@ -171,7 +171,7 @@ python scripts/test_perception.py --interactive
 
 ```yaml
 camera:
-  device_index: 0        # 相机编号（0=棋盘视角）
+  device_index: 4        # 相机编号（0=棋盘视角）
 
 board_detection:
   method: manual         # manual=标定模式  auto=自动检测
@@ -187,12 +187,12 @@ AI 思考时间在 `src/game/ai.py` 中修改 `time_per_move_ms` 参数。
 
 ## 完成状态
 
-| 模块 | 状态 | 说明 |
-|------|------|------|
-| 相机驱动 | ✅ | OpenCV UVC webcam |
-| 棋盘标定 | ✅ | 交互式四点标定工具 |
-| 棋盘检测 | ✅ | 手动标定 + auto 备选 |
-| 棋子检测 | ✅ | HoughCircles + 对比度分类 |
-| AI 决策 | ✅ | Rapfi 引擎（Gomocup 冠军级） |
-| 机械臂控制 | 🔧 | 队友开发中 |
-| 主流程编排 | 🏗️ | 骨架完成，等待机械臂集成 |
+| 模块       | 状态 | 说明                         |
+| ---------- | ---- | ---------------------------- |
+| 相机驱动   | ✅   | OpenCV UVC webcam            |
+| 棋盘标定   | ✅   | 交互式四点标定工具           |
+| 棋盘检测   | ✅   | 手动标定 + auto 备选         |
+| 棋子检测   | ✅   | HoughCircles + 对比度分类    |
+| AI 决策    | ✅   | Rapfi 引擎（Gomocup 冠军级） |
+| 机械臂控制 | 🔧   | 队友开发中                   |
+| 主流程编排 | 🏗️ | 骨架完成，等待机械臂集成     |
