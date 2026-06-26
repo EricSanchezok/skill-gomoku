@@ -6,7 +6,9 @@ from typing import Any
 
 from src.game.ai import ai_decide, ai_reset
 from src.game.board import Board, check_win
+from src.perception.board_calibration import board_frame_required, load_board_frame_calibration
 from src.perception.state_extractor import StateExtractor
+from src.robot.air_pump import SuctionController, create_suction_controller_from_config
 from src.robot.calibration import (
     ManualPoseSampler,
     get_robot_z_height,
@@ -36,6 +38,8 @@ class GameOrchestrator:
         z_height: float | None = None,
         pose_mapper: BoardPoseMapper | None = None,
         robot_mover: RobotPoseMover | None = None,
+        suction_controller: SuctionController | None = None,
+        pickup_pose: Mapping[str, float] | None = None,
         my_stone: int = BLACK,
     ):
         self.extractor = state_extractor
@@ -43,6 +47,8 @@ class GameOrchestrator:
         self.z_height = z_height
         self.pose_mapper = pose_mapper
         self.robot_mover = robot_mover
+        self.suction_controller = suction_controller
+        self.pickup_pose = dict(pickup_pose) if pickup_pose is not None else None
         self.my_stone = my_stone
         self.opponent = WHITE if my_stone == BLACK else BLACK
         self.board = Board()
@@ -56,6 +62,9 @@ class GameOrchestrator:
     ) -> "GameOrchestrator":
         """Create an orchestrator from config, including saved robot calibration."""
         robot_cfg = config.get("robot", {})
+        if board_frame_required(config):
+            load_board_frame_calibration(config, required=True)
+
         pose_mapper = load_pose_mapper_from_config(config)
 
         if pose_mapper is not None:
@@ -79,6 +88,8 @@ class GameOrchestrator:
             calib=calib,
             z_height=get_robot_z_height(config),
             pose_mapper=pose_mapper,
+            suction_controller=create_suction_controller_from_config(config),
+            pickup_pose=_parse_optional_pose_mapping(robot_cfg.get("pickup_pose")),
             my_stone=_parse_stone(config.get("game", {}).get("my_stone", "black")),
         )
 
@@ -162,8 +173,21 @@ class GameOrchestrator:
         if self.robot_mover is not None:
             if not isinstance(target, Mapping):
                 raise TypeError("robot_mover integration requires a mapping robot target")
-            self.robot_mover.move_to(target)
-            # TODO: 触发末端落子机构 / gripper sequence
+            stone_picked = False
+            try:
+                if self.pickup_pose is not None:
+                    self.robot_mover.move_to(self.pickup_pose)
+                if self.suction_controller is not None:
+                    self.suction_controller.pick_stone()
+                    stone_picked = True
+                self.robot_mover.move_to(target)
+                if self.suction_controller is not None:
+                    self.suction_controller.drop_stone()
+                    stone_picked = False
+            except Exception:
+                if self.suction_controller is not None and stone_picked:
+                    self.suction_controller.off()
+                raise
         self.board.place(row, col, self.my_stone)
         self.move_count += 1
         return target
@@ -214,3 +238,13 @@ def _parse_stone(value: Any) -> int:
     if value in (BLACK, WHITE):
         return int(value)
     raise ValueError(f"Unknown stone value: {value!r}")
+
+
+def _parse_optional_pose_mapping(value: Any) -> dict[str, float] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("robot.pickup_pose must be a mapping of LeRobot action keys to floats")
+    if not value:
+        raise ValueError("robot.pickup_pose cannot be empty when configured")
+    return {str(key): float(item) for key, item in value.items()}

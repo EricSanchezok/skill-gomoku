@@ -144,6 +144,8 @@ python scripts/calibrate_board.py
 ```
 
 按提示依次点击棋盘四个角：**左上 → 右上 → 右下 → 左下**，预览 warp 对齐效果后按 `Y` 保存。
+主流程在 `board_detection.method: manual` 时会强制检查
+`board.calibration.corners`，没有录入棋框位置会直接报错并提示先运行这个脚本。
 
 ### 使用 81 个实测姿态映射机械臂落点
 
@@ -178,6 +180,31 @@ python scripts/calibrate_robot_board.py --backend input
 ```python
 target_action = orchestrator.execute_my_move(row, col)
 ```
+
+### 接入吸棋气泵
+
+气泵控制已接入主流程，但默认关闭，避免在没有 Raspberry Pi GPIO 的开发机上误初始化硬件。
+真机启用时在 `config/default.yaml` 里设置：
+
+```yaml
+robot:
+  pickup_pose:
+    shoulder_pan.pos: 0.0
+    shoulder_lift.pos: 0.0
+    elbow_flex.pos: 0.0
+    wrist_flex.pos: 0.0
+    wrist_roll.pos: 0.0
+    gripper.pos: 0.0
+  air_pump:
+    enabled: true
+    valve_pin: 20
+    pump_pin: 21
+    pick_seconds: 1.0
+    drop_delay_seconds: 0.05
+```
+
+落子动作顺序是：移动到 `pickup_pose`（如果配置了）→ 开电磁阀并开气泵吸棋子 →
+移动到目标棋位 → 关闭电磁阀落子 → 关闭气泵降噪。
 
 机器人控制、SO101 平滑移动工具和安全检查见 `docs/robot.md`。
 

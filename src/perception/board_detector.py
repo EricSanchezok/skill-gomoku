@@ -17,6 +17,10 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from src.perception.board_calibration import (
+    board_frame_required,
+    load_board_frame_calibration,
+)
 from src.utils.constants import (
     BOARD_COLS,
     BOARD_ROWS,
@@ -63,24 +67,20 @@ class BoardDetector:
             config: 完整配置字典。读取 ``board.calibration`` 和
                 ``board_detection`` 段。
         """
-        board_cfg: dict = (config or {}).get("board", {})
         det_cfg: dict = (config or {}).get("board_detection", {})
+
+        default_method = "manual" if board_frame_required(config or {}) else "auto"
+        self._method: str = det_cfg.get("method", default_method)
 
         # ---- 加载预标定角点 ----
         self._calib_corners: np.ndarray | None = None
-        calib = board_cfg.get("calibration", {})
-        if calib.get("method") == "manual":
-            cr = calib.get("corners", {})
-            keys = ("top_left", "top_right", "bottom_right", "bottom_left")
-            if all(k in cr for k in keys):
-                self._calib_corners = np.array([cr[k] for k in keys], dtype=np.float32).reshape(
-                    4, 2
-                )
-                logger.info("使用手动标定角点模式，跳过棋盘检测")
-
-        self._method: str = det_cfg.get(
-            "method", "manual" if self._calib_corners is not None else "auto"
+        frame_calibration = load_board_frame_calibration(
+            config or {},
+            required=self._method == "manual",
         )
+        if frame_calibration is not None:
+            self._calib_corners = frame_calibration.as_array()
+            logger.info("使用手动标定角点模式，跳过棋盘检测")
 
         # Auto-mode 参数
         self._canny_low: float = float(det_cfg.get("canny_low", self._CANNY_LOW))
@@ -228,8 +228,11 @@ class BoardDetector:
         if bounds is None:
             return None
 
-        l, t, r, b = bounds
-        return np.array([[l, t], [r, t], [r, b], [l, b]], dtype=np.float32)
+        left, top, right, bottom = bounds
+        return np.array(
+            [[left, top], [right, top], [right, bottom], [left, bottom]],
+            dtype=np.float32,
+        )
 
     @staticmethod
     def _find_grid_cluster(h_mids, v_mids):
@@ -271,8 +274,8 @@ class BoardDetector:
             [[0, 0], [dst_size - 1, 0], [dst_size - 1, dst_size - 1], [0, dst_size - 1]],
             dtype=np.float32,
         )
-        M = cv2.getPerspectiveTransform(corners, dst_c)
-        return M, cv2.warpPerspective(image, M, (dst_size, dst_size))
+        transform = cv2.getPerspectiveTransform(corners, dst_c)
+        return transform, cv2.warpPerspective(image, transform, (dst_size, dst_size))
 
     # ---- Internal: grid lines on warped image ------------------------------
 

@@ -12,12 +12,11 @@ The module behaves like an Arduino Servo target:
 
 Useful suction states:
     吸棋子:
-        valve closed, pump on, wait until vacuum is built.
+        valve open, pump on, wait until vacuum is built.
     保持吸住:
-        valve closed, pump on by default. Use --no-keep-pump only after confirming
-        the suction cup can hold vacuum without continuously running the pump.
+        valve open, pump on.
     放棋子:
-        pump off, valve open for a short release pulse, then everything off.
+        valve closed first, then pump off to reduce noise.
 """
 
 from __future__ import annotations
@@ -46,7 +45,7 @@ DEFAULT_FRAME_MS = 20
 
 DEFAULT_PICK_SECONDS = 1.0
 DEFAULT_HOLD_SECONDS = 1.0
-DEFAULT_RELEASE_SECONDS = 0.8
+DEFAULT_DROP_DELAY_SECONDS = 0.05
 DEFAULT_INTERVAL_SECONDS = 0.2
 
 
@@ -54,7 +53,7 @@ DEFAULT_INTERVAL_SECONDS = 0.2
 class AirPumpTiming:
     pick_seconds: float = DEFAULT_PICK_SECONDS
     hold_seconds: float = DEFAULT_HOLD_SECONDS
-    release_seconds: float = DEFAULT_RELEASE_SECONDS
+    drop_delay_seconds: float = DEFAULT_DROP_DELAY_SECONDS
     interval_seconds: float = DEFAULT_INTERVAL_SECONDS
 
 
@@ -85,9 +84,10 @@ class AirPumpRig:
     Test rig for direct hardware control and semantic suction actions.
 
     Low-level truth table:
-        valve closed + pump off -> safe off
-        valve closed + pump on  -> build or keep vacuum
-        valve open   + pump off -> release vacuum
+        valve closed + pump off -> safe off / stone released
+        valve open   + pump on  -> build or keep suction
+        valve closed + pump on  -> transient drop state before quieting pump
+        valve open   + pump off -> direct manual-test state, not a suction hold
     """
 
     def __init__(
@@ -98,7 +98,6 @@ class AirPumpRig:
         min_pulse_us: int = DEFAULT_MIN_PULSE_US,
         max_pulse_us: int = DEFAULT_MAX_PULSE_US,
         frame_ms: int = DEFAULT_FRAME_MS,
-        keep_pump_during_hold: bool = True,
         dry_run: bool = False,
         verbose: bool = True,
     ) -> None:
@@ -115,7 +114,6 @@ class AirPumpRig:
 
         self.valve_pin = valve_pin
         self.pump_pin = pump_pin
-        self.keep_pump_during_hold = keep_pump_during_hold
         self.dry_run = dry_run
         self.verbose = verbose
         self.state = AirPumpState()
@@ -192,16 +190,15 @@ class AirPumpRig:
     # -------------------------
 
     def suction_state(self) -> None:
-        """Build vacuum: valve closed, pump on."""
-        self._log("进入吸力状态：电磁阀关闭，气泵开启")
-        self.valve_close()
+        """Build vacuum: valve open, pump on."""
+        self._log("进入吸力状态：电磁阀开启，气泵开启")
+        self.valve_open()
         self.pump_on()
 
-    def release_state(self) -> None:
-        """Release vacuum: pump off, valve open."""
-        self._log("进入放气状态：气泵关闭，电磁阀开启")
-        self.pump_off()
-        self.valve_open()
+    def drop_state(self) -> None:
+        """Drop stone: close the valve while the pump may still be running."""
+        self._log("进入落子状态：电磁阀关闭，棋子释放")
+        self.valve_close()
 
     def pick_stone(self, pick_seconds: float = DEFAULT_PICK_SECONDS) -> None:
         """吸棋子：先建立负压，再进入保持吸住状态。"""
@@ -210,39 +207,31 @@ class AirPumpRig:
         sleep(pick_seconds)
         self.hold_stone()
 
-    def hold_stone(self, keep_pump: bool | None = None) -> None:
-        """保持吸住：默认继续开泵，除非确认硬件可以闭阀保压。"""
-        if keep_pump is None:
-            keep_pump = self.keep_pump_during_hold
+    def hold_stone(self) -> None:
+        """保持吸住：电磁阀保持开启，气泵保持开启。"""
+        self._log("保持吸住：电磁阀保持开启，气泵保持开启")
+        self.valve_open()
+        self.pump_on()
 
-        if keep_pump:
-            self._log("保持吸住：电磁阀关闭，气泵保持开启")
-            self.valve_close()
-            self.pump_on()
-        else:
-            self._log("保持吸住：电磁阀关闭，气泵关闭，依靠负压保持")
-            self.valve_close()
-            self.pump_off()
-
-    def drop_stone(self, release_seconds: float = DEFAULT_RELEASE_SECONDS) -> None:
-        """放棋子：先关泵，再打开电磁阀泄压，最后回到安全关闭。"""
-        self._log(f"放棋子：泄压 {release_seconds:.2f} 秒")
-        self.release_state()
-        sleep(release_seconds)
-        self.off()
+    def drop_stone(self, drop_delay_seconds: float = DEFAULT_DROP_DELAY_SECONDS) -> None:
+        """放棋子：先关闭电磁阀让棋子落下，再关闭气泵降低噪音。"""
+        self._log(f"放棋子：关闭电磁阀，{drop_delay_seconds:.2f} 秒后关闭气泵")
+        self.drop_state()
+        sleep(drop_delay_seconds)
+        self.pump_off()
 
     def pick_hold_drop(
         self,
         *,
         pick_seconds: float = DEFAULT_PICK_SECONDS,
         hold_seconds: float = DEFAULT_HOLD_SECONDS,
-        release_seconds: float = DEFAULT_RELEASE_SECONDS,
+        drop_delay_seconds: float = DEFAULT_DROP_DELAY_SECONDS,
     ) -> None:
         """Complete suction-cup action test: 吸棋子 -> 保持吸住 -> 放棋子."""
         self.pick_stone(pick_seconds=pick_seconds)
         self._log(f"保持吸住 {hold_seconds:.2f} 秒")
         sleep(hold_seconds)
-        self.drop_stone(release_seconds=release_seconds)
+        self.drop_stone(drop_delay_seconds=drop_delay_seconds)
 
     def close(self) -> None:
         try:
@@ -280,28 +269,25 @@ class RawKeyboard:
         return sys.stdin.read(1)
 
 
-def print_keyboard_help(timing: AirPumpTiming, keep_pump: bool) -> None:
-    keep_text = "保持开泵" if keep_pump else "闭阀保压"
+def print_keyboard_help(timing: AirPumpTiming) -> None:
     print(
         "\n单键测试模式（不需要回车）\n"
         "  p        切换气泵开/关\n"
         "  v        切换电磁阀开/关\n"
         "  1 / 2    气泵开 / 气泵关\n"
         "  3 / 4    电磁阀开 / 电磁阀关\n"
-        "  s        吸棋子：关阀 + 开泵，建立负压后进入保持\n"
-        "  h        保持吸住：关阀，按当前保持策略控制气泵\n"
-        "  d        放棋子：关泵 + 开阀泄压，然后全部关闭\n"
+        "  s        吸棋子：开阀 + 开泵，建立负压后进入保持\n"
+        "  h        保持吸住：开阀 + 开泵\n"
+        "  d        放棋子：关阀落子，然后关泵降噪\n"
         "  t        完整流程：吸棋子 -> 保持吸住 -> 放棋子\n"
-        "  k        切换保持策略：保持开泵 / 闭阀保压\n"
         "  + / -    调整吸棋子时长，每次 0.1 秒\n"
-        "  ] / [    调整放棋子泄压时长，每次 0.1 秒\n"
+        "  ] / [    调整关阀落子后关泵延迟，每次 0.01 秒\n"
         "  0/空格   全部关闭\n"
         "  ?        显示帮助\n"
         "  q        退出并关闭\n"
         f"\n当前参数：吸棋子 {timing.pick_seconds:.2f}s，"
         f"保持 {timing.hold_seconds:.2f}s，"
-        f"放棋子 {timing.release_seconds:.2f}s，"
-        f"保持策略={keep_text}\n"
+        f"落子后关泵延迟 {timing.drop_delay_seconds:.2f}s\n"
     )
 
 
@@ -309,7 +295,7 @@ def run_keyboard_test(air: AirPumpRig, timing: AirPumpTiming) -> None:
     if not sys.stdin.isatty():
         raise SystemExit("Keyboard mode needs an interactive terminal.")
 
-    print_keyboard_help(timing, air.keep_pump_during_hold)
+    print_keyboard_help(timing)
 
     with RawKeyboard() as keyboard:
         while True:
@@ -322,7 +308,7 @@ def run_keyboard_test(air: AirPumpRig, timing: AirPumpTiming) -> None:
             if key in {"q", "Q"}:
                 break
             if key == "?":
-                print_keyboard_help(timing, air.keep_pump_during_hold)
+                print_keyboard_help(timing)
             elif key in {"0", " "}:
                 air.off()
             elif key == "p":
@@ -342,17 +328,13 @@ def run_keyboard_test(air: AirPumpRig, timing: AirPumpTiming) -> None:
             elif key == "h":
                 air.hold_stone()
             elif key == "d":
-                air.drop_stone(release_seconds=timing.release_seconds)
+                air.drop_stone(drop_delay_seconds=timing.drop_delay_seconds)
             elif key == "t":
                 air.pick_hold_drop(
                     pick_seconds=timing.pick_seconds,
                     hold_seconds=timing.hold_seconds,
-                    release_seconds=timing.release_seconds,
+                    drop_delay_seconds=timing.drop_delay_seconds,
                 )
-            elif key == "k":
-                air.keep_pump_during_hold = not air.keep_pump_during_hold
-                mode = "保持开泵" if air.keep_pump_during_hold else "闭阀保压"
-                print(f"\n保持策略切换为：{mode}")
             elif key in {"+", "="}:
                 timing.pick_seconds = round(timing.pick_seconds + 0.1, 2)
                 print(f"\n吸棋子时长：{timing.pick_seconds:.2f}s")
@@ -360,11 +342,11 @@ def run_keyboard_test(air: AirPumpRig, timing: AirPumpTiming) -> None:
                 timing.pick_seconds = max(0.1, round(timing.pick_seconds - 0.1, 2))
                 print(f"\n吸棋子时长：{timing.pick_seconds:.2f}s")
             elif key == "]":
-                timing.release_seconds = round(timing.release_seconds + 0.1, 2)
-                print(f"\n放棋子泄压时长：{timing.release_seconds:.2f}s")
+                timing.drop_delay_seconds = round(timing.drop_delay_seconds + 0.01, 2)
+                print(f"\n落子后关泵延迟：{timing.drop_delay_seconds:.2f}s")
             elif key == "[":
-                timing.release_seconds = max(0.1, round(timing.release_seconds - 0.1, 2))
-                print(f"\n放棋子泄压时长：{timing.release_seconds:.2f}s")
+                timing.drop_delay_seconds = max(0.0, round(timing.drop_delay_seconds - 0.01, 2))
+                print(f"\n落子后关泵延迟：{timing.drop_delay_seconds:.2f}s")
             else:
                 print(f"\n未知按键：{repr(key)}，按 ? 查看帮助")
 
@@ -392,14 +374,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--frame-ms", type=int, default=DEFAULT_FRAME_MS)
     parser.add_argument("--pick-time", type=float, default=DEFAULT_PICK_SECONDS)
     parser.add_argument("--hold-time", type=float, default=None)
-    parser.add_argument("--release-time", type=float, default=DEFAULT_RELEASE_SECONDS)
+    parser.add_argument(
+        "--drop-delay",
+        "--release-time",
+        dest="drop_delay",
+        type=float,
+        default=DEFAULT_DROP_DELAY_SECONDS,
+        help="Seconds to wait after closing the valve before turning the pump off.",
+    )
     parser.add_argument("--interval", type=float, default=DEFAULT_INTERVAL_SECONDS)
     parser.add_argument("--count", type=int, default=1)
-    parser.add_argument(
-        "--no-keep-pump",
-        action="store_true",
-        help="During hold, close valve and turn pump off. Use only after hardware validation.",
-    )
     parser.add_argument("--dry-run", action="store_true", help="Print state changes without GPIO.")
     parser.add_argument("--quiet", action="store_true", help="Reduce status output.")
     return parser
@@ -412,7 +396,7 @@ def main() -> int:
     timing = AirPumpTiming(
         pick_seconds=args.pick_time,
         hold_seconds=DEFAULT_HOLD_SECONDS if args.hold_time is None else args.hold_time,
-        release_seconds=args.release_time,
+        drop_delay_seconds=args.drop_delay,
         interval_seconds=args.interval,
     )
 
@@ -429,7 +413,6 @@ def main() -> int:
             min_pulse_us=args.min_pulse_us,
             max_pulse_us=args.max_pulse_us,
             frame_ms=args.frame_ms,
-            keep_pump_during_hold=not args.no_keep_pump,
             dry_run=args.dry_run,
             verbose=not args.quiet,
         ) as air:
@@ -452,14 +435,14 @@ def main() -> int:
                 else:
                     sleep(timing.hold_seconds)
             elif args.command == "drop":
-                air.drop_stone(release_seconds=timing.release_seconds)
+                air.drop_stone(drop_delay_seconds=timing.drop_delay_seconds)
             elif args.command == "cycle":
                 for index in range(max(1, args.count)):
                     print(f"\nCycle {index + 1}/{max(1, args.count)}")
                     air.pick_hold_drop(
                         pick_seconds=timing.pick_seconds,
                         hold_seconds=timing.hold_seconds,
-                        release_seconds=timing.release_seconds,
+                        drop_delay_seconds=timing.drop_delay_seconds,
                     )
                     if index != max(1, args.count) - 1:
                         sleep(timing.interval_seconds)

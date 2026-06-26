@@ -50,6 +50,18 @@ robot:
   pose_map:
     method: measured
     path: so101_board_81_positions.json
+  pickup_pose: null
+  air_pump:
+    enabled: false
+    dry_run: false
+    valve_pin: 20
+    pump_pin: 21
+    min_pulse_us: 544
+    max_pulse_us: 2400
+    frame_ms: 20
+    pick_seconds: 1.0
+    drop_delay_seconds: 0.05
+    verbose: true
   calibration_points: []
   calibration:
     method: manual
