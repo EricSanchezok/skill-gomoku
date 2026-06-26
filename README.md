@@ -26,6 +26,7 @@ skill-gomoku/
 │   └── default.yaml         # 标定角点、Hough 参数、时间控制
 ├── scripts/
 │   ├── calibrate_board.py   # 交互式棋盘四角标定
+│   ├── calibrate_robot_board.py # 手带机械臂记录棋盘四角
 │   └── test_perception.py   # 感知管线测试（mock / 真实相机）
 ├── src/
 │   ├── perception/
@@ -35,7 +36,10 @@ skill-gomoku/
 │   │   ├── grid_mapper.py   # 像素 → 棋盘行列映射
 │   │   └── state_extractor.py # 完整管线入口 + 差异检测
 │   ├── robot/
-│   │   └── controller.py    # 机械臂控制骨架（队友实现）
+│   │   ├── controller.py    # 棋盘格 → 机械臂姿态映射
+│   │   ├── calibration.py   # 手带机械臂四角标定
+│   │   ├── so101_adapter.py # SO101 当前姿态读取
+│   │   └── so101_mover.py   # 已验证的 SO101 平滑移动工具
 │   ├── game/
 │   │   ├── board.py         # 15×15 棋盘状态 & 胜负判定
 │   │   └── ai.py            # Rapfi 引擎子进程封装 (Gomocup 协议)
@@ -111,6 +115,42 @@ python scripts/calibrate_board.py
 ```
 
 按提示依次点击棋盘四个角：**左上 → 右上 → 右下 → 左下**，预览 warp 对齐效果后按 `Y` 保存。
+
+### 使用 81 个实测姿态映射机械臂落点
+
+当前机械臂落点不再依赖四角双线性插值。SO101 直接加载
+`so101_board_81_positions.json` 里的实测姿态表，把抽象棋位 `(row, col)`
+映射到对应的 LeRobot action。
+
+开局前可以先让机械臂依次恢复四个角的实测位置，用这四个角来摆正/定位棋盘：
+
+```bash
+conda run -n lerobot python scripts/replay_robot_corners.py \
+  --config config/default.yaml \
+  --port /dev/tty.usbmodem5A4B0487101 \
+  --robot-id so101_follower_0610
+```
+
+确认棋盘位置后，再运行相机棋盘标定：
+
+```bash
+source .venv/bin/activate
+python scripts/calibrate_board.py
+```
+
+旧的四角手动标定脚本仍保留为兼容路径，但它只适合作为没有实测姿态表时的备用方案：
+
+```bash
+python scripts/calibrate_robot_board.py --backend input
+```
+
+在代码里，主流程会优先读取 `robot.pose_map.path` 指向的实测姿态表：
+
+```python
+target_action = orchestrator.execute_my_move(row, col)
+```
+
+机器人控制、SO101 平滑移动工具和安全检查见 `docs/robot.md`。
 
 ### 测试感知管线
 

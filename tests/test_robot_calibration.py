@@ -1,0 +1,251 @@
+from __future__ import annotations
+
+import json
+
+import yaml
+
+from src.orchestrator import GameOrchestrator
+from src.robot.calibration import (
+    load_robot_calibration,
+    run_manual_robot_calibration,
+    save_robot_calibration,
+)
+from src.robot.controller import (
+    CalibrationPoints,
+    board_to_robot_coords,
+    board_to_robot_pose,
+)
+from src.robot.pose_mapper import MeasuredBoardPoseMapper
+from src.robot.so101_mover import (
+    ensure_action,
+    interpolate_action,
+    smoothstep,
+)
+from src.utils.constants import WHITE
+
+
+def _measured_pose_data(size: int = 3) -> dict:
+    positions = {}
+    for row in range(size):
+        for col in range(size):
+            nonlinear_center_offset = 50.0 if row == 1 and col == 1 else 0.0
+            positions[f"r{row + 1}c{col + 1}"] = {
+                "row": row + 1,
+                "col": col + 1,
+                "row_index": row,
+                "col_index": col,
+                "action": {
+                    "joint.pos": row * 100.0 + col * 10.0 + nonlinear_center_offset,
+                    "gripper.pos": row + col,
+                },
+            }
+    return {
+        "board": {"kind": "gomoku", "size": size},
+        "coordinate_space": "lerobot_action",
+        "positions": positions,
+    }
+
+
+def test_cartesian_calibration_interpolates_board_center() -> None:
+    calib = CalibrationPoints.from_list(
+        [
+            (0.0, 0.0, 10.0),
+            (14.0, 0.0, 10.0),
+            (14.0, 14.0, 10.0),
+            (0.0, 14.0, 10.0),
+        ]
+    )
+
+    assert board_to_robot_coords(7, 7, 15, 15, calib, z_height=42.0) == (7.0, 7.0, 42.0)
+
+
+def test_mapping_calibration_interpolates_each_action_key() -> None:
+    calib = CalibrationPoints.from_corners(
+        {
+            "top_left": {"shoulder_pan.pos": 0.0, "elbow_flex.pos": 10.0},
+            "top_right": {"shoulder_pan.pos": 14.0, "elbow_flex.pos": 10.0},
+            "bottom_right": {"shoulder_pan.pos": 14.0, "elbow_flex.pos": 24.0},
+            "bottom_left": {"shoulder_pan.pos": 0.0, "elbow_flex.pos": 24.0},
+        }
+    )
+
+    assert board_to_robot_pose(7, 7, 15, 15, calib) == {
+        "shoulder_pan.pos": 7.0,
+        "elbow_flex.pos": 17.0,
+    }
+
+
+def test_manual_calibration_uses_sampler_and_finishes_with_hold() -> None:
+    class FakeSampler:
+        coordinate_space = "fake"
+
+        def __init__(self) -> None:
+            self.started = False
+            self.finished_hold = None
+            self.poses = iter(
+                [
+                    (0, 0, 0),
+                    (10, 0, 0),
+                    (10, 10, 0),
+                    (0, 10, 0),
+                ]
+            )
+
+        def prepare_manual_guidance(self) -> None:
+            self.started = True
+
+        def read_current_pose(self):
+            return next(self.poses)
+
+        def finish_manual_guidance(self, hold: bool = False) -> None:
+            self.finished_hold = hold
+
+    sampler = FakeSampler()
+    prompts: list[str] = []
+
+    calib = run_manual_robot_calibration(
+        sampler,
+        input_fn=lambda prompt: prompts.append(prompt) or "",
+        print_fn=lambda _message: None,
+        hold_after=True,
+    )
+
+    assert sampler.started
+    assert sampler.finished_hold is True
+    assert len(prompts) == 4
+    assert board_to_robot_coords(14, 14, 15, 15, calib, z_height=5) == (10.0, 10.0, 5.0)
+
+
+def test_save_and_load_robot_calibration_round_trip(tmp_path) -> None:
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("robot:\n  port: test\n", encoding="utf-8")
+    calib = CalibrationPoints.from_list(
+        [
+            {"a.pos": 0.0, "b.pos": 0.0},
+            {"a.pos": 1.0, "b.pos": 0.0},
+            {"a.pos": 1.0, "b.pos": 1.0},
+            {"a.pos": 0.0, "b.pos": 1.0},
+        ]
+    )
+
+    save_robot_calibration(config_path, calib, coordinate_space="lerobot_action", z_height=30.0)
+
+    loaded_yaml = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    loaded = load_robot_calibration(loaded_yaml)
+
+    assert loaded.to_corners_dict() == calib.to_corners_dict()
+    assert loaded_yaml["robot"]["calibration"]["coordinate_space"] == "lerobot_action"
+    assert loaded_yaml["robot"]["z_height"] == 30.0
+
+
+def test_orchestrator_from_config_allows_required_startup_calibration() -> None:
+    orchestrator = GameOrchestrator.from_config(
+        state_extractor=object(),
+        config={
+            "robot": {"calibrate_before_game": True, "z_height": 12.0},
+            "game": {"my_stone": "white"},
+        },
+    )
+
+    assert orchestrator.calib is None
+    assert orchestrator.z_height == 12.0
+    assert orchestrator.my_stone == WHITE
+
+
+def test_measured_pose_mapper_loads_direct_positions_without_interpolation() -> None:
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+
+    assert mapper.board_rows == 3
+    assert mapper.board_cols == 3
+    assert mapper.coordinate_space == "lerobot_action"
+    assert mapper.target_for_cell(1, 1) == {
+        "joint.pos": 160.0,
+        "gripper.pos": 2.0,
+    }
+
+    corners = mapper.corner_calibration_points()
+    interpolated_center = board_to_robot_pose(1, 1, 3, 3, corners)
+
+    assert interpolated_center == {"joint.pos": 110.0, "gripper.pos": 2.0}
+    assert mapper.target_for_cell(1, 1) != interpolated_center
+
+
+def test_measured_pose_mapper_replays_four_corners_in_order() -> None:
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+    seen: list[dict[str, float]] = []
+    labels: list[str] = []
+
+    class FakeMover:
+        def move_to(self, target_pose):
+            seen.append(dict(target_pose))
+            return dict(target_pose)
+
+    mapper.replay_corners(
+        FakeMover(),
+        before_move=lambda _name, target: labels.append(target.label),
+    )
+
+    assert labels == ["r1c1", "r1c3", "r3c3", "r3c1"]
+    assert seen == [
+        mapper.target_for_label("r1c1"),
+        mapper.target_for_label("r1c3"),
+        mapper.target_for_label("r3c3"),
+        mapper.target_for_label("r3c1"),
+    ]
+
+
+def test_orchestrator_prefers_measured_pose_mapper_over_legacy_calibration() -> None:
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+    legacy_calib = CalibrationPoints.from_list(
+        [
+            {"joint.pos": 0.0, "gripper.pos": 0.0},
+            {"joint.pos": 20.0, "gripper.pos": 2.0},
+            {"joint.pos": 220.0, "gripper.pos": 4.0},
+            {"joint.pos": 200.0, "gripper.pos": 2.0},
+        ]
+    )
+    orchestrator = GameOrchestrator(
+        state_extractor=object(),
+        calib=legacy_calib,
+        pose_mapper=mapper,
+    )
+
+    assert orchestrator.execute_my_move(1, 1) == {
+        "joint.pos": 160.0,
+        "gripper.pos": 2.0,
+    }
+
+
+def test_orchestrator_from_config_loads_measured_pose_map(tmp_path) -> None:
+    pose_map_path = tmp_path / "poses.json"
+    pose_map_path.write_text(json.dumps(_measured_pose_data()), encoding="utf-8")
+
+    orchestrator = GameOrchestrator.from_config(
+        state_extractor=object(),
+        config={
+            "robot": {
+                "pose_map": {
+                    "method": "measured",
+                    "path": str(pose_map_path),
+                }
+            }
+        },
+    )
+
+    assert orchestrator.pose_mapper is not None
+    assert orchestrator.execute_my_move(1, 1) == {
+        "joint.pos": 160.0,
+        "gripper.pos": 2.0,
+    }
+
+
+def test_so101_action_helpers_validate_and_interpolate() -> None:
+    target = ensure_action({"shoulder_pan.pos": 10, "elbow_flex.pos": 20})
+    start = {"shoulder_pan.pos": 0.0, "elbow_flex.pos": 10.0}
+
+    assert smoothstep(0.0) == 0.0
+    assert smoothstep(1.0) == 1.0
+    assert interpolate_action(start, target, 0.5) == {
+        "shoulder_pan.pos": 5.0,
+        "elbow_flex.pos": 15.0,
+    }
