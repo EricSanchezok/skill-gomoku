@@ -13,6 +13,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from src.robot.lerobot_calibration import install_bundled_lerobot_calibration
+
 Action = dict[str, float]
 ProgressCallback = Callable[[int, int, float], None]
 
@@ -112,6 +114,7 @@ class SO101SmoothMover:
         profile: MotionProfile | None = None,
         use_degrees: bool = True,
     ) -> None:
+        install_bundled_lerobot_calibration(robot_id)
         try:
             from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
         except ImportError as exc:

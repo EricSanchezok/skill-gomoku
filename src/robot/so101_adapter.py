@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from src.robot.controller import RobotPose
+from src.robot.lerobot_calibration import install_bundled_lerobot_calibration
 
 
 class SO101PoseSampler:
@@ -20,6 +21,7 @@ class SO101PoseSampler:
         max_relative_target: float = 5.0,
         use_degrees: bool = True,
     ) -> None:
+        install_bundled_lerobot_calibration(robot_id)
         try:
             from lerobot.robots.so_follower import SO101Follower, SO101FollowerConfig
         except ImportError as exc:

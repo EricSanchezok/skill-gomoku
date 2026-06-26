@@ -24,7 +24,10 @@ skill-gomoku/
 │   └── rapfi                # Rapfi 引擎 (ARM64 NEON, ~1.8MB)
 ├── config/
 │   └── default.yaml         # 标定角点、Hough 参数、时间控制
+├── calibration/
+│   └── lerobot/             # 随仓库携带的 SO101 LeRobot 电机标定
 ├── scripts/
+│   ├── install_lerobot_calibration.py # 恢复 LeRobot 本地标定缓存
 │   ├── calibrate_board.py   # 交互式棋盘四角标定
 │   ├── calibrate_robot_board.py # 手带机械臂记录棋盘四角
 │   └── test_perception.py   # 感知管线测试（mock / 真实相机）
@@ -105,6 +108,32 @@ uv pip install -r requirements.txt
 #    git clone https://github.com/dhbloo/rapfi.git
 #    cd Rapfi && cmake --preset arm64-clang-NEON -DCMAKE_BUILD_TYPE=Release
 #    cmake --build build/arm64-clang-NEON
+```
+
+### 安装 SO101 的 LeRobot 标定
+
+仓库内已携带 `gomoku_so101` 实测使用的 LeRobot 电机标定：
+
+```text
+calibration/lerobot/robots/so_follower/so101_follower_0610.json
+```
+
+在新机器 clone 后可以显式安装一次：
+
+```bash
+python scripts/install_lerobot_calibration.py
+```
+
+它会复制到 LeRobot 默认读取的位置：
+
+```text
+~/.cache/huggingface/lerobot/calibration/robots/so_follower/so101_follower_0610.json
+```
+
+`SO101SmoothMover` 和 `SO101PoseSampler` 初始化时也会自动补齐这份缓存。默认不会覆盖本机已有同名标定；如果确认要恢复仓库版本，运行：
+
+```bash
+python scripts/install_lerobot_calibration.py --overwrite
 ```
 
 ### 标定棋盘（首次使用必须）

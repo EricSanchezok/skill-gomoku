@@ -15,6 +15,12 @@ from src.robot.controller import (
     board_to_robot_coords,
     board_to_robot_pose,
 )
+from src.robot.lerobot_calibration import (
+    DEFAULT_SO101_ROBOT_ID,
+    bundled_lerobot_calibration_path,
+    install_bundled_lerobot_calibration,
+    lerobot_calibration_cache_path,
+)
 from src.robot.pose_mapper import MeasuredBoardPoseMapper
 from src.robot.so101_mover import (
     ensure_action,
@@ -249,3 +255,21 @@ def test_so101_action_helpers_validate_and_interpolate() -> None:
         "shoulder_pan.pos": 5.0,
         "elbow_flex.pos": 15.0,
     }
+
+
+def test_bundled_lerobot_calibration_installs_without_overwriting(tmp_path) -> None:
+    source = bundled_lerobot_calibration_path(DEFAULT_SO101_ROBOT_ID)
+    assert source.is_file()
+
+    installed = install_bundled_lerobot_calibration(calibration_root=tmp_path)
+    expected = lerobot_calibration_cache_path(calibration_root=tmp_path)
+
+    assert installed == expected
+    assert expected.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")
+
+    expected.write_text('{"custom": true}\n', encoding="utf-8")
+    install_bundled_lerobot_calibration(calibration_root=tmp_path)
+    assert expected.read_text(encoding="utf-8") == '{"custom": true}\n'
+
+    install_bundled_lerobot_calibration(calibration_root=tmp_path, overwrite=True)
+    assert expected.read_text(encoding="utf-8") == source.read_text(encoding="utf-8")

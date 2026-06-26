@@ -7,9 +7,11 @@
 - `src/robot/pose_mapper.py`：加载实测姿态表，把抽象棋位直接映射成机械臂目标姿态。
 - `src/robot/controller.py`：旧四角插值映射，保留作兼容/测试路径。
 - `src/robot/calibration.py`：手带机械臂记录棋盘四角的通用标定流程。
+- `src/robot/lerobot_calibration.py`：把仓库内携带的 LeRobot 电机标定安装到本机缓存。
 - `src/robot/so101_adapter.py`：标定时读取 SO101 当前 LeRobot action 姿态。
 - `src/robot/so101_mover.py`：从本地测试工具提炼出的 SO101 平滑移动封装。
 - `src/robot/tools/so101_move_demo.py`：移动到 `center` / `waiting` 预设的小工具。
+- `scripts/install_lerobot_calibration.py`：显式恢复 `so101_follower_0610` 的 LeRobot 标定。
 - `scripts/replay_robot_corners.py`：按实测姿态表依次恢复棋盘四角。
 - `scripts/calibrate_robot_board.py`：把棋盘四角标定结果写入 YAML 配置。
 
@@ -33,6 +35,28 @@
 当前主流程使用实测姿态表，不再用四角双线性插值推算落点。`robot.pose_map.path`
 指向的 JSON 里，每个抽象棋位都有一组录好的 action。主流程调用
 `MeasuredBoardPoseMapper.target_for_cell(row, col)` 直接查表返回目标 action。
+
+## LeRobot 电机标定
+
+`gomoku_so101` 已验证可用的 SO101 LeRobot 电机标定随仓库存放在：
+
+```text
+calibration/lerobot/robots/so_follower/so101_follower_0610.json
+```
+
+LeRobot 默认会从下面的位置读取同名文件：
+
+```text
+~/.cache/huggingface/lerobot/calibration/robots/so_follower/so101_follower_0610.json
+```
+
+新机器 clone 后可以手动恢复：
+
+```bash
+python scripts/install_lerobot_calibration.py
+```
+
+`SO101SmoothMover` 和 `SO101PoseSampler` 初始化时会自动执行同样的安装检查。默认保留本机已有同名标定；确认要恢复仓库版本时加 `--overwrite`。
 
 ## 开局前恢复棋盘四角
 
