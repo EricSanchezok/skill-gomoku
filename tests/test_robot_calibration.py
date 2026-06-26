@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import yaml
 
 from src.orchestrator import GameOrchestrator
@@ -13,12 +15,35 @@ from src.robot.controller import (
     board_to_robot_coords,
     board_to_robot_pose,
 )
+from src.robot.pose_mapper import MeasuredBoardPoseMapper
 from src.robot.so101_mover import (
     ensure_action,
     interpolate_action,
     smoothstep,
 )
 from src.utils.constants import WHITE
+
+
+def _measured_pose_data(size: int = 3) -> dict:
+    positions = {}
+    for row in range(size):
+        for col in range(size):
+            nonlinear_center_offset = 50.0 if row == 1 and col == 1 else 0.0
+            positions[f"r{row + 1}c{col + 1}"] = {
+                "row": row + 1,
+                "col": col + 1,
+                "row_index": row,
+                "col_index": col,
+                "action": {
+                    "joint.pos": row * 100.0 + col * 10.0 + nonlinear_center_offset,
+                    "gripper.pos": row + col,
+                },
+            }
+    return {
+        "board": {"kind": "gomoku", "size": size},
+        "coordinate_space": "lerobot_action",
+        "positions": positions,
+    }
 
 
 def test_cartesian_calibration_interpolates_board_center() -> None:
@@ -125,6 +150,93 @@ def test_orchestrator_from_config_allows_required_startup_calibration() -> None:
     assert orchestrator.calib is None
     assert orchestrator.z_height == 12.0
     assert orchestrator.my_stone == WHITE
+
+
+def test_measured_pose_mapper_loads_direct_positions_without_interpolation() -> None:
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+
+    assert mapper.board_rows == 3
+    assert mapper.board_cols == 3
+    assert mapper.coordinate_space == "lerobot_action"
+    assert mapper.target_for_cell(1, 1) == {
+        "joint.pos": 160.0,
+        "gripper.pos": 2.0,
+    }
+
+    corners = mapper.corner_calibration_points()
+    interpolated_center = board_to_robot_pose(1, 1, 3, 3, corners)
+
+    assert interpolated_center == {"joint.pos": 110.0, "gripper.pos": 2.0}
+    assert mapper.target_for_cell(1, 1) != interpolated_center
+
+
+def test_measured_pose_mapper_replays_four_corners_in_order() -> None:
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+    seen: list[dict[str, float]] = []
+    labels: list[str] = []
+
+    class FakeMover:
+        def move_to(self, target_pose):
+            seen.append(dict(target_pose))
+            return dict(target_pose)
+
+    mapper.replay_corners(
+        FakeMover(),
+        before_move=lambda _name, target: labels.append(target.label),
+    )
+
+    assert labels == ["r1c1", "r1c3", "r3c3", "r3c1"]
+    assert seen == [
+        mapper.target_for_label("r1c1"),
+        mapper.target_for_label("r1c3"),
+        mapper.target_for_label("r3c3"),
+        mapper.target_for_label("r3c1"),
+    ]
+
+
+def test_orchestrator_prefers_measured_pose_mapper_over_legacy_calibration() -> None:
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+    legacy_calib = CalibrationPoints.from_list(
+        [
+            {"joint.pos": 0.0, "gripper.pos": 0.0},
+            {"joint.pos": 20.0, "gripper.pos": 2.0},
+            {"joint.pos": 220.0, "gripper.pos": 4.0},
+            {"joint.pos": 200.0, "gripper.pos": 2.0},
+        ]
+    )
+    orchestrator = GameOrchestrator(
+        state_extractor=object(),
+        calib=legacy_calib,
+        pose_mapper=mapper,
+    )
+
+    assert orchestrator.execute_my_move(1, 1) == {
+        "joint.pos": 160.0,
+        "gripper.pos": 2.0,
+    }
+
+
+def test_orchestrator_from_config_loads_measured_pose_map(tmp_path) -> None:
+    pose_map_path = tmp_path / "poses.json"
+    pose_map_path.write_text(json.dumps(_measured_pose_data()), encoding="utf-8")
+
+    orchestrator = GameOrchestrator.from_config(
+        state_extractor=object(),
+        config={
+            "robot": {
+                "pose_map": {
+                    "method": "measured",
+                    "path": str(pose_map_path),
+                }
+            }
+        },
+    )
+
+    assert orchestrator.pose_mapper is not None
+    assert orchestrator.execute_my_move(1, 1) == {
+        "joint.pos": 160.0,
+        "gripper.pos": 2.0,
+    }
 
 
 def test_so101_action_helpers_validate_and_interpolate() -> None:

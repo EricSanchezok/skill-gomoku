@@ -1,6 +1,7 @@
 """主流程编排器 — 相机→分析→AI→机械臂循环."""
 
 import logging
+from collections.abc import Mapping
 from typing import Any
 
 from src.game.ai import ai_decide, ai_reset
@@ -14,6 +15,7 @@ from src.robot.calibration import (
     save_robot_calibration,
 )
 from src.robot.controller import CalibrationPoints, RobotPose, board_to_robot_pose
+from src.robot.pose_mapper import BoardPoseMapper, RobotPoseMover, load_pose_mapper_from_config
 from src.utils.constants import BLACK, EMPTY, WHITE
 
 logger = logging.getLogger(__name__)
@@ -32,11 +34,15 @@ class GameOrchestrator:
         state_extractor: StateExtractor,
         calib: CalibrationPoints | None = None,
         z_height: float | None = None,
+        pose_mapper: BoardPoseMapper | None = None,
+        robot_mover: RobotPoseMover | None = None,
         my_stone: int = BLACK,
     ):
         self.extractor = state_extractor
         self.calib = calib
         self.z_height = z_height
+        self.pose_mapper = pose_mapper
+        self.robot_mover = robot_mover
         self.my_stone = my_stone
         self.opponent = WHITE if my_stone == BLACK else BLACK
         self.board = Board()
@@ -50,17 +56,29 @@ class GameOrchestrator:
     ) -> "GameOrchestrator":
         """Create an orchestrator from config, including saved robot calibration."""
         robot_cfg = config.get("robot", {})
-        try:
-            calib = load_robot_calibration(config)
-        except ValueError:
-            if not robot_cfg.get("calibrate_before_game", False):
-                raise
+        pose_mapper = load_pose_mapper_from_config(config)
+
+        if pose_mapper is not None:
             calib = None
+            logger.info(
+                "Loaded measured robot pose map: %dx%d, coordinate_space=%s",
+                pose_mapper.board_rows,
+                pose_mapper.board_cols,
+                pose_mapper.coordinate_space,
+            )
+        else:
+            try:
+                calib = load_robot_calibration(config)
+            except ValueError:
+                if not robot_cfg.get("calibrate_before_game", False):
+                    raise
+                calib = None
 
         return cls(
             state_extractor=state_extractor,
             calib=calib,
             z_height=get_robot_z_height(config),
+            pose_mapper=pose_mapper,
             my_stone=_parse_stone(config.get("game", {}).get("my_stone", "black")),
         )
 
@@ -141,9 +159,11 @@ class GameOrchestrator:
             机械臂控制器使用的目标姿态。
         """
         target = self._target_for_cell(row, col)
-        # TODO: 调用机械臂控制接口
-        # robot_controller.move_to(target)
-        # robot_controller.gripper.activate()
+        if self.robot_mover is not None:
+            if not isinstance(target, Mapping):
+                raise TypeError("robot_mover integration requires a mapping robot target")
+            self.robot_mover.move_to(target)
+            # TODO: 触发末端落子机构 / gripper sequence
         self.board.place(row, col, self.my_stone)
         self.move_count += 1
         return target
@@ -171,9 +191,13 @@ class GameOrchestrator:
         return winner
 
     def _target_for_cell(self, row: int, col: int) -> RobotPose:
+        if self.pose_mapper is not None:
+            return self.pose_mapper.target_for_cell(row, col)
+
         if self.calib is None:
             raise RuntimeError(
-                "Robot calibration is missing. Run calibrate_robot_before_game() first."
+                "Robot target mapping is missing. Configure robot.pose_map or run "
+                "calibrate_robot_before_game() for the legacy interpolation path."
             )
         return board_to_robot_pose(
             row, col, self.board.rows, self.board.cols, self.calib, self.z_height

@@ -4,11 +4,13 @@
 
 ## 文件分工
 
-- `src/robot/controller.py`：把棋盘 `(row, col)` 映射成机械臂目标姿态。
+- `src/robot/pose_mapper.py`：加载实测姿态表，把抽象棋位直接映射成机械臂目标姿态。
+- `src/robot/controller.py`：旧四角插值映射，保留作兼容/测试路径。
 - `src/robot/calibration.py`：手带机械臂记录棋盘四角的通用标定流程。
 - `src/robot/so101_adapter.py`：标定时读取 SO101 当前 LeRobot action 姿态。
 - `src/robot/so101_mover.py`：从本地测试工具提炼出的 SO101 平滑移动封装。
 - `src/robot/tools/so101_move_demo.py`：移动到 `center` / `waiting` 预设的小工具。
+- `scripts/replay_robot_corners.py`：按实测姿态表依次恢复棋盘四角。
 - `scripts/calibrate_robot_board.py`：把棋盘四角标定结果写入 YAML 配置。
 
 `gomoku_so101` 里的旧 raw tick 实验、大体量 Web UI 和 `old_scripts` 没有原样搬进主包。它们适合硬件 bring-up 和诊断，但不适合成为主对弈流程的运行依赖。
@@ -28,28 +30,30 @@
 }
 ```
 
-每局开始前，可以手带机械臂末端依次对准棋盘左上、右上、右下、左下四个角。系统记录这四个角的 action 姿态，然后通过双线性插值，把任意 `(row, col)` 转成同一组关节 key 的目标 action。
+当前主流程使用实测姿态表，不再用四角双线性插值推算落点。`robot.pose_map.path`
+指向的 JSON 里，每个抽象棋位都有一组录好的 action。主流程调用
+`MeasuredBoardPoseMapper.target_for_cell(row, col)` 直接查表返回目标 action。
 
-## 开局前标定棋盘四角
+## 开局前恢复棋盘四角
 
-棋盘位置可能变化时，开局前运行：
+棋盘位置可能变化时，开局前先让 SO101 依次恢复实测表中的四个角：
 
 ```bash
-conda run -n lerobot python scripts/calibrate_robot_board.py \
-  --backend so101 \
+conda run -n lerobot python scripts/replay_robot_corners.py \
   --config config/default.yaml \
   --port /dev/tty.usbmodem5A4B0487101 \
   --robot-id so101_follower_0610
 ```
 
-脚本会先释放力矩，方便手带机械臂。记录顺序固定为：
+恢复顺序固定为：
 
 1. 左上
 2. 右上
 3. 右下
 4. 左下
 
-结果会写入 `config/default.yaml` 的 `robot.calibration.corners`。没有硬件时可以用终端输入模式测试配置写入：
+用这四个角定位好棋盘后，再运行视觉棋盘标定 `scripts/calibrate_board.py`。
+`scripts/calibrate_robot_board.py` 仍保留为旧兼容路径；没有实测姿态表时才需要它：
 
 ```bash
 python scripts/calibrate_robot_board.py --backend input
@@ -100,17 +104,10 @@ finally:
 
 ## 接入对弈流程
 
-开局时可以把手动标定接到 orchestrator：
-
-```python
-orchestrator.start_new_game(
-    sampler=sampler,
-    calibrate_robot=True,
-    config_path="config/default.yaml",
-)
-```
-
-我方落子时，`GameOrchestrator.execute_my_move(row, col)` 会先算出插值后的目标 action。下一步集成时，把这个 target 交给 `SO101SmoothMover.move_to()`，再触发末端落子机构即可。
+`GameOrchestrator.from_config()` 会优先加载 `robot.pose_map.path` 指向的实测姿态表。
+我方落子时，`GameOrchestrator.execute_my_move(row, col)` 会直接查表得到目标
+action。若构造 orchestrator 时传入 `robot_mover=SO101SmoothMover(...)`，它会把这个
+target 交给 `SO101SmoothMover.move_to()`，再等待后续接入末端落子机构。
 
 ## 安全检查
 
@@ -126,5 +123,6 @@ orchestrator.start_new_game(
 - `ImportError: lerobot`：需要在控制机械臂的 LeRobot 环境里运行。
 - `No '.pos' keys found`：当前 observation 不是预期的 SO101 LeRobot action 格式。
 - 上力矩后机械臂突然动：检查是否先把当前姿态写成 hold target。
-- 标定能加载但落点不准：重新按左上、右上、右下、左下顺序记录四角。
+- 实测表能加载但落点不准：优先检查棋盘是否按四角恢复结果摆正；必要时重新记录对应棋位，而不是只改四角。
+- 使用旧四角标定时落点不准：这是插值误差的常见表现，优先切换到实测姿态表。
 - 本地提交后推送失败：先 `gh auth login`，再 push feature 分支。

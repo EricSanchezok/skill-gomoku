@@ -47,6 +47,9 @@ robot:
   z_height: 50.0
   calibrate_before_game: true
   coordinate_space: lerobot_action
+  pose_map:
+    method: measured
+    path: so101_board_81_positions.json
   calibration_points: []
   calibration:
     method: manual
