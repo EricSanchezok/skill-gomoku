@@ -5,12 +5,16 @@ from __future__ import annotations
 
 import argparse
 
-from src.robot.so101_mover import (
+from src.robot.so101_lowlevel_mover import (
+    DEFAULT_LOWLEVEL_DT_SECONDS,
+    DEFAULT_LOWLEVEL_DURATION_SECONDS,
     DEFAULT_PORT,
     DEFAULT_ROBOT_ID,
+    SO101LowLevelMover,
+    make_lowlevel_profile,
+)
+from src.robot.so101_mover import (
     PRESET_ACTIONS,
-    MotionProfile,
-    SO101SmoothMover,
 )
 
 
@@ -19,19 +23,27 @@ def main() -> int:
     parser.add_argument("preset", choices=sorted(PRESET_ACTIONS), help="Tested target preset")
     parser.add_argument("--port", default=DEFAULT_PORT)
     parser.add_argument("--robot-id", default=DEFAULT_ROBOT_ID)
-    parser.add_argument("--duration", type=float, default=5.0)
-    parser.add_argument("--dt", type=float, default=0.01)
-    parser.add_argument("--max-relative-target", type=float, default=5.0)
+    parser.add_argument("--duration", type=float, default=DEFAULT_LOWLEVEL_DURATION_SECONDS)
+    parser.add_argument("--dt", type=float, default=DEFAULT_LOWLEVEL_DT_SECONDS)
+    parser.add_argument("--lookahead", type=int, default=None)
+    parser.add_argument("--pan-lookahead", type=int, default=None)
+    parser.add_argument("--lift-lookahead", type=int, default=None)
+    parser.add_argument("--elbow-lookahead", type=int, default=None)
+    parser.add_argument("--wrist-flex-lookahead", type=int, default=None)
     parser.add_argument("--release-after", action="store_true")
     args = parser.parse_args()
 
-    profile = MotionProfile(
+    profile = make_lowlevel_profile(
         duration_seconds=args.duration,
         dt_seconds=args.dt,
-        max_relative_target=args.max_relative_target,
+        lookahead_ticks=args.lookahead,
+        pan_lookahead_ticks=args.pan_lookahead,
+        lift_lookahead_ticks=args.lift_lookahead,
+        elbow_lookahead_ticks=args.elbow_lookahead,
+        wrist_flex_lookahead_ticks=args.wrist_flex_lookahead,
     )
     target = PRESET_ACTIONS[args.preset]
-    mover = SO101SmoothMover(port=args.port, robot_id=args.robot_id, profile=profile)
+    mover = SO101LowLevelMover(port=args.port, robot_id=args.robot_id, profile=profile)
 
     try:
         mover.connect()

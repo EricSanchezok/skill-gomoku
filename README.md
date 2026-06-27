@@ -45,7 +45,8 @@ skill-gomoku/
 │   │   ├── controller.py    # 棋盘落子点 → 机械臂姿态映射
 │   │   ├── calibration.py   # 手带机械臂四角标定
 │   │   ├── so101_adapter.py # SO101 当前姿态读取
-│   │   └── so101_mover.py   # 已验证的 SO101 平滑移动工具
+│   │   ├── so101_lowlevel_mover.py # 正式 lowlevel raw tick 运控
+│   │   └── so101_mover.py   # 旧 LeRobot send_action 对照路径
 │   ├── game/
 │   │   ├── board.py         # 15×15 棋盘状态 & 胜负判定
 │   │   └── ai.py            # Rapfi 引擎子进程封装 (Gomocup 协议)
@@ -179,7 +180,8 @@ python scripts/install_lerobot_calibration.py
 ~/.cache/huggingface/lerobot/calibration/robots/so_follower/so101_follower_0610.json
 ```
 
-`SO101SmoothMover` 和 `SO101PoseSampler` 初始化时也会自动补齐这份缓存。默认不会覆盖本机已有同名标定；如果确认要恢复仓库版本，运行：
+`SO101LowLevelMover` 会直接读取仓库里的这份标定来做 action → raw tick 转换；
+`SO101PoseSampler` 初始化时也会自动补齐 LeRobot 缓存。默认不会覆盖本机已有同名标定；如果确认要恢复仓库版本，运行：
 
 ```bash
 python scripts/install_lerobot_calibration.py --overwrite
@@ -247,8 +249,8 @@ python scripts/move_to_board_position.py r5c5
 python scripts/move_to_board_position.py r5c5 --dry-run
 ```
 
-这个测试脚本沿用旧真机脚本的方式：从当前姿态插值到目标姿态，按固定频率连续
-`send_action()`，最后再补发一次最终目标。
+这个测试脚本现在走正式 lowlevel 运控链路：现有 LeRobot action 先转 raw tick，
+再用 min-jerk + sync write + per-joint lookahead 连续发送 `Goal_Position`。
 
 ### 接入吸棋气泵
 

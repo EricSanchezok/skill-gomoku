@@ -9,7 +9,8 @@
 - `src/robot/calibration.py`：手带机械臂记录棋盘四角的通用标定流程。
 - `src/robot/lerobot_calibration.py`：把仓库内携带的 LeRobot 电机标定安装到本机缓存。
 - `src/robot/so101_adapter.py`：标定时读取 SO101 当前 LeRobot action 姿态。
-- `src/robot/so101_mover.py`：从本地测试工具提炼出的 SO101 平滑移动封装。
+- `src/robot/so101_lowlevel_mover.py`：正式对弈使用的 SO101 raw tick 低层移动封装。
+- `src/robot/so101_mover.py`：旧 LeRobot `send_action()` 平滑移动封装，保留作兼容/对照。
 - `src/robot/air_pump.py`：气泵/电磁阀吸棋控制，供主流程调用。
 - `src/interaction.py`：人类确认落子，以及机器人说话、跳舞、调用 skill 的接口。
 - `src/robot/tools/so101_move_demo.py`：移动到 `center` / `waiting` 预设的小工具。
@@ -41,6 +42,14 @@ LeRobot action 字典，例如：
 当前主流程使用实测姿态表，不再用四角双线性插值推算落点。`robot.pose_map.path`
 指向的 JSON 里，每个抽象棋位都有一组录好的 action。主流程调用
 `MeasuredBoardPoseMapper.target_for_cell(row, col)` 直接查表返回目标 action。
+
+真机执行时，`SO101LowLevelMover` 会把这些 LeRobot action 转成 STS3215 raw tick：
+
+- 普通关节：`raw = int(pos_deg * 4095 / 360 + (range_min + range_max) / 2)`
+- 夹爪：`raw = int(pos_0_100 / 100 * (range_max - range_min) + range_min)`
+
+这里的 `range_min/range_max` 来自仓库携带的 LeRobot 电机标定。也就是说，已有
+81 点棋位、取子位和 waiting 位都能继续用；替换的是底层发指令方式，不是重新录坐标。
 
 ## Rapfi 二进制
 
@@ -86,7 +95,8 @@ LeRobot 默认会从下面的位置读取同名文件：
 python scripts/install_lerobot_calibration.py
 ```
 
-`SO101SmoothMover` 和 `SO101PoseSampler` 初始化时会自动执行同样的安装检查。默认保留本机已有同名标定；确认要恢复仓库版本时加 `--overwrite`。
+`SO101LowLevelMover` 会直接读取仓库里的这份标定来做 action → raw tick 转换；
+`SO101PoseSampler` 初始化时会自动执行同样的安装检查。默认保留本机已有同名标定；确认要恢复仓库版本时加 `--overwrite`。
 
 ## 开局前恢复棋盘四角
 
@@ -113,15 +123,32 @@ conda run -n lerobot python scripts/replay_robot_corners.py \
 python scripts/calibrate_robot_board.py --backend input
 ```
 
-## 平滑移动工具
+## Lowlevel 移动工具
 
-`SO101SmoothMover` 是从已经实测可用的 `so101_smooth_mover.py` 提炼出来的。它保留了最重要的安全路径：
+`SO101LowLevelMover` 是从已经实测成功的 v3 lowlevel 脚本沉淀出来的。默认参数是：
 
-1. 只连接 motor bus。
-2. 读取当前 `.pos` 姿态。
-3. 先把当前姿态写回去作为 hold target。
+- `duration=12.0`
+- `dt=0.02`
+- `settle=2.0`
+- `tolerance=4`
+- `lookahead`: 1号/4号 24，2号 80，3号 60，5号/夹爪 8
+
+底层默认只写两个 SRAM 运行寄存器：
+
+```text
+Torque_Enable
+Goal_Position
+```
+
+它不会写速度、加速度、PID、位置限制、Homing Offset 等标定/运动配置寄存器。
+
+安全路径：
+
+1. 连接串口并确认 6 个 STS3215 都响应。
+2. 读取当前 raw 姿态。
+3. 先把当前 raw 姿态写回 `Goal_Position`。
 4. 再开启力矩。
-5. 按固定频率连续发送插值 action，最后补发最终目标。
+5. 用 min-jerk 轨迹 + sync write + per-joint lookahead 连续发送 raw 目标。
 6. 只在明确需要时调用 `release()` 释放力矩。
 
 测试移动到中心姿态：
@@ -150,15 +177,15 @@ python scripts/move_to_board_position.py r5c5
 python scripts/move_to_board_position.py r5c5 --dry-run
 ```
 
-这个测试脚本沿用旧真机脚本的方式：从当前姿态插值到目标姿态，按固定频率连续
-`send_action()`，最后再补发一次最终目标。
+这个测试脚本会走正式 lowlevel 运控链路：现有 LeRobot action 先转 raw tick，
+再按 v3 lookahead 控制器发 `Goal_Position`。
 
 代码里可以这样用：
 
 ```python
-from src.robot.so101_mover import SO101SmoothMover
+from src.robot.so101_lowlevel_mover import SO101LowLevelMover
 
-mover = SO101SmoothMover(
+mover = SO101LowLevelMover(
     port="/dev/ttyACM0",
     robot_id="so101_follower_0610",
 )

@@ -25,6 +25,12 @@ from src.robot.lerobot_calibration import (
     lerobot_calibration_cache_path,
 )
 from src.robot.pose_mapper import MeasuredBoardPoseMapper
+from src.robot.so101_lowlevel_mover import (
+    lerobot_action_to_raw,
+    load_lerobot_motor_calibration,
+    make_lowlevel_profile,
+    raw_to_lerobot_action,
+)
 from src.robot.so101_mover import (
     MotionProfile,
     SO101SmoothMover,
@@ -453,6 +459,45 @@ def test_so101_action_helpers_validate_and_interpolate() -> None:
         "shoulder_pan.pos": 5.0,
         "elbow_flex.pos": 15.0,
     }
+
+
+def test_so101_lerobot_action_converts_to_lowlevel_raw_ticks() -> None:
+    calibration = load_lerobot_motor_calibration()
+    action = {
+        "elbow_flex.pos": 44.08791208791209,
+        "gripper.pos": 32.26925746009716,
+        "shoulder_lift.pos": -10.901098901098901,
+        "shoulder_pan.pos": 2.10989010989011,
+        "wrist_flex.pos": 25.0989010989011,
+        "wrist_roll.pos": 1.1868131868131868,
+    }
+
+    raw = lerobot_action_to_raw(action, calibration)
+
+    assert raw == {
+        "elbow_flex": 2549,
+        "gripper": 2440,
+        "shoulder_lift": 1909,
+        "shoulder_pan": 2028,
+        "wrist_flex": 2349,
+        "wrist_roll": 2061,
+    }
+    roundtrip = raw_to_lerobot_action(raw, calibration)
+    for key, value in action.items():
+        assert roundtrip[key] == pytest.approx(value, abs=0.1)
+
+
+def test_lowlevel_profile_keeps_verified_v3_lookahead_defaults() -> None:
+    profile = make_lowlevel_profile()
+
+    assert profile.duration_seconds == 12.0
+    assert profile.dt_seconds == 0.02
+    assert profile.lookahead_for("shoulder_pan") == 24
+    assert profile.lookahead_for("shoulder_lift") == 80
+    assert profile.lookahead_for("elbow_flex") == 60
+    assert profile.lookahead_for("wrist_flex") == 24
+    assert profile.lookahead_for("wrist_roll") == 8
+    assert profile.lookahead_for("gripper") == 8
 
 
 def test_so101_move_to_streams_intermediate_targets_then_final_target() -> None:

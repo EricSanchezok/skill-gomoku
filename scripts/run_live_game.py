@@ -23,11 +23,16 @@ from src.interaction import (  # noqa: E402
 from src.orchestrator import GameOrchestrator  # noqa: E402
 from src.perception.camera import create_camera  # noqa: E402
 from src.perception.state_extractor import StateExtractor  # noqa: E402
-from src.robot.so101_mover import (  # noqa: E402
-    DEFAULT_MAX_RELATIVE_TARGET,
+from src.robot.so101_lowlevel_mover import (  # noqa: E402
+    DEFAULT_LOWLEVEL_DT_SECONDS,
+    DEFAULT_LOWLEVEL_DURATION_SECONDS,
+    DEFAULT_LOWLEVEL_SETTLE_SECONDS,
+    DEFAULT_LOWLEVEL_TOLERANCE_TICKS,
     DEFAULT_ROBOT_ID,
-    MotionProfile,
-    SO101SmoothMover,
+    SO101LowLevelMover,
+    make_lowlevel_profile,
+)
+from src.robot.so101_mover import (  # noqa: E402
     suppress_lerobot_clamp_warnings,
 )
 from src.utils.config_loader import load_config  # noqa: E402
@@ -43,7 +48,7 @@ class ConfirmingRobotMover:
 
     def __init__(
         self,
-        delegate: SO101SmoothMover,
+        delegate: SO101LowLevelMover,
         *,
         verbose_target: bool = False,
         input_fn=input,
@@ -212,9 +217,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--robot-stone", choices=("black", "white"), default=None)
     parser.add_argument("--engine-path", default=None, help="Override game.ai.engine_path")
     parser.add_argument("--time-per-move-ms", type=int, default=None)
-    parser.add_argument("--duration", type=float, default=5.0, help="SO101 move duration")
-    parser.add_argument("--dt", type=float, default=0.01, help="SO101 move command interval")
-    parser.add_argument("--max-relative-target", type=float, default=DEFAULT_MAX_RELATIVE_TARGET)
+    parser.add_argument("--duration", type=float, default=DEFAULT_LOWLEVEL_DURATION_SECONDS)
+    parser.add_argument("--dt", type=float, default=DEFAULT_LOWLEVEL_DT_SECONDS)
+    parser.add_argument("--settle", type=float, default=DEFAULT_LOWLEVEL_SETTLE_SECONDS)
+    parser.add_argument("--tolerance", type=int, default=DEFAULT_LOWLEVEL_TOLERANCE_TICKS)
+    parser.add_argument("--lookahead", type=int, default=None)
+    parser.add_argument("--pan-lookahead", type=int, default=None)
+    parser.add_argument("--lift-lookahead", type=int, default=None)
+    parser.add_argument("--elbow-lookahead", type=int, default=None)
+    parser.add_argument("--wrist-flex-lookahead", type=int, default=None)
+    parser.add_argument("--max-relative-target", type=float, default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--max-turns",
         type=int,
@@ -244,7 +256,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--show-clamp-warnings",
         action="store_true",
-        help="Show LeRobot max-relative-target clamp warnings.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("--yes", action="store_true", help="Skip final start confirmation")
     parser.add_argument("--release-on-exit", action="store_true")
@@ -279,7 +291,7 @@ def _apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> No
         pump_cfg["dry_run"] = True
 
 
-def _create_mover(config: Mapping[str, Any], args: argparse.Namespace) -> SO101SmoothMover:
+def _create_mover(config: Mapping[str, Any], args: argparse.Namespace) -> SO101LowLevelMover:
     robot_cfg = config.get("robot", {})
     if not isinstance(robot_cfg, Mapping):
         robot_cfg = {}
@@ -288,12 +300,18 @@ def _create_mover(config: Mapping[str, Any], args: argparse.Namespace) -> SO101S
     if not port:
         raise ValueError("robot.port is required unless --dry-run-robot is set")
     robot_id = str(robot_cfg.get("id", DEFAULT_ROBOT_ID))
-    profile = MotionProfile(
+    profile = make_lowlevel_profile(
         duration_seconds=args.duration,
         dt_seconds=args.dt,
-        max_relative_target=args.max_relative_target,
+        settle_seconds=args.settle,
+        tolerance_ticks=args.tolerance,
+        lookahead_ticks=args.lookahead,
+        pan_lookahead_ticks=args.pan_lookahead,
+        lift_lookahead_ticks=args.lift_lookahead,
+        elbow_lookahead_ticks=args.elbow_lookahead,
+        wrist_flex_lookahead_ticks=args.wrist_flex_lookahead,
     )
-    return SO101SmoothMover(port=port, robot_id=robot_id, profile=profile)
+    return SO101LowLevelMover(port=port, robot_id=robot_id, profile=profile)
 
 
 def _validate_engine_path(config: Mapping[str, Any]) -> None:
