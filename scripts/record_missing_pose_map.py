@@ -8,10 +8,10 @@ Default behavior:
   - Save after every recorded position.
 
 Examples:
-  conda run -n lerobot python scripts/record_missing_pose_map.py --port /dev/ttyUSB0
+  conda run -n lerobot python scripts/record_missing_pose_map.py --port /dev/ttyACM0
 
   conda run -n lerobot python scripts/record_missing_pose_map.py \
-    --positions r3c7 r5c9 --overwrite --port /dev/ttyUSB0
+    --positions r3c7 r5c9 --overwrite --port /dev/ttyACM0
 """
 
 from __future__ import annotations

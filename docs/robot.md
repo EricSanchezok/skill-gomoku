@@ -179,7 +179,7 @@ python scripts/run_live_game.py --mock-camera --dry-run-robot --disable-air-pump
 python scripts/run_live_game.py --dry-run-robot --disable-air-pump
 
 # 3. 树莓派真机，确认 GPIO/取子位/串口都配置好后
-python scripts/run_live_game.py --enable-air-pump --port /dev/ttyUSB0
+python scripts/run_live_game.py --enable-air-pump --port /dev/ttyACM0
 ```
 
 当前仓库里的 `so101_board_81_positions.json` 是中心 9 x 9 的 81 个落点，正好对应
@@ -268,7 +268,7 @@ robot:
 录黑/白两个取子位：
 
 ```bash
-conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyUSB0
+conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyACM0
 ```
 
 ## 安全检查
