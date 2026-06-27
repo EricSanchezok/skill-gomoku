@@ -240,18 +240,15 @@ target_action = orchestrator.execute_my_move(row, col)
 单独测试某个实测落点时，可以用：
 
 ```bash
-# 默认按中心 9x9 pose map 的 1-based local 坐标移动：current -> waiting -> r5c5
+# 按中心 9x9 pose map 的 1-based 坐标移动：lock current -> waiting -> r5c5
 python scripts/move_to_board_position.py r5c5
-
-# 也可以输入 15x15 全局落子点坐标，脚本会通过 game.play_area 映射到 9x9 pose map
-python scripts/move_to_board_position.py 8,8 --space global
 
 # 只解析目标，不连接机械臂
 python scripts/move_to_board_position.py r5c5 --dry-run
 ```
 
-这个脚本默认隐藏 LeRobot 的重复 clamp warning。如果需要检查 LeRobot 原始安全告警，
-加 `--show-clamp-warnings`。
+这个测试脚本默认不设置 `max_relative_target`，会直接发送最终目标，然后轮询等待机械臂
+运动到位。
 
 ### 接入吸棋气泵
 

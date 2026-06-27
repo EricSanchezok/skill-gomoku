@@ -26,6 +26,8 @@ from src.robot.lerobot_calibration import (
 )
 from src.robot.pose_mapper import MeasuredBoardPoseMapper
 from src.robot.so101_mover import (
+    MotionProfile,
+    SO101SmoothMover,
     ensure_action,
     interpolate_action,
     smoothstep,
@@ -451,6 +453,41 @@ def test_so101_action_helpers_validate_and_interpolate() -> None:
         "shoulder_pan.pos": 5.0,
         "elbow_flex.pos": 15.0,
     }
+
+
+def test_so101_move_to_sends_final_target_once_then_waits() -> None:
+    class FakeRobot:
+        def __init__(self) -> None:
+            self.sent = []
+            self.observations = iter(
+                [
+                    {"joint.pos": 0.0},
+                    {"joint.pos": 5.0},
+                    {"joint.pos": 10.0},
+                ]
+            )
+
+        def send_action(self, action):
+            self.sent.append(dict(action))
+            return dict(action)
+
+        def get_observation(self):
+            return next(self.observations)
+
+    fake_robot = FakeRobot()
+    mover = SO101SmoothMover.__new__(SO101SmoothMover)
+    mover.robot = fake_robot
+    mover.profile = MotionProfile(
+        duration_seconds=1.0,
+        dt_seconds=0.0 + 0.001,
+        max_relative_target=None,
+        position_tolerance=0.5,
+    )
+
+    final = mover.move_to({"joint.pos": 10.0})
+
+    assert fake_robot.sent == [{"joint.pos": 10.0}]
+    assert final == {"joint.pos": 10.0}
 
 
 def test_bundled_lerobot_calibration_installs_without_overwriting(tmp_path) -> None:

@@ -121,7 +121,7 @@ python scripts/calibrate_robot_board.py --backend input
 2. 读取当前 `.pos` 姿态。
 3. 先把当前姿态写回去作为 hold target。
 4. 再开启力矩。
-5. 用很多小步的 cubic easing action 慢慢移动到目标。
+5. 发送最终目标 action，然后轮询 observation 等待到位。
 6. 只在明确需要时调用 `release()` 释放力矩。
 
 测试移动到中心姿态：
@@ -138,26 +138,20 @@ conda run -n lerobot python -m src.robot.tools.so101_move_demo center \
 conda run -n lerobot python -m src.robot.tools.so101_move_demo waiting
 ```
 
-测试某一个实测棋位时，用 `scripts/move_to_board_position.py`。默认输入的是中心
-9 x 9 pose map 的 1-based local 坐标，运动顺序固定为
-`current -> waiting_pose -> target`：
+测试某一个实测棋位时，用 `scripts/move_to_board_position.py`。输入的是中心
+9 x 9 pose map 的 1-based 坐标，运动顺序固定为
+`lock current -> waiting_pose -> target`：
 
 ```bash
 # 到 9x9 局部棋位 r5c5
 python scripts/move_to_board_position.py r5c5
 
-# 用 15x15 全局落子点坐标，经过 game.play_area 映射到 9x9 pose map
-python scripts/move_to_board_position.py 8,8 --space global
-
-# 连续交互测试多个点
-python scripts/move_to_board_position.py
+# 只解析目标，不连接机械臂
+python scripts/move_to_board_position.py r5c5 --dry-run
 ```
 
-这个脚本和 live run 默认都会隐藏 LeRobot 反复输出的
-`Relative goal position magnitude had to be clamped to be safe` warning。这个
-warning 表示 LeRobot 的 `max_relative_target` 安全限幅在生效；如果要诊断真实限幅
-情况，加 `--show-clamp-warnings`。如果运动明显变慢或跟不上，优先把
-`--duration` 调大，而不是直接把 `--max-relative-target` 调得很高。
+这个测试脚本默认不设置 `max_relative_target`，会直接发送最终目标，然后按当前关节误差
+轮询等待到位。
 
 代码里可以这样用：
 
@@ -307,7 +301,7 @@ conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyACM0
 ## 安全检查
 
 - 开启力矩前确认串口是当前 SO101。
-- 测试时保持 `max_relative_target` 保守。
+- 真机完整对局如果启用 `max_relative_target`，保持取值保守。
 - 每次上力矩前先 hold 当前姿态，避免冲向旧目标。
 - 取子位没有录好时不要跑真机对局；`run_live_game.py` 会默认拒绝这种状态。
 - 新场地第一次跑保持逐步确认，不要加 `--no-confirm-robot-moves`。

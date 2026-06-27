@@ -5,10 +5,9 @@ import logging
 import sys
 from pathlib import Path
 
-from src.game.play_area import PlayArea
-from src.robot.pose_mapper import MeasuredBoardPoseMapper
 from src.robot.so101_mover import (
     LEROBOT_CLAMP_WARNING_PREFIX,
+    PRESET_ACTIONS,
     suppress_lerobot_clamp_warnings,
 )
 
@@ -24,59 +23,15 @@ def _load_move_module():
     return module
 
 
-def _measured_pose_data(size: int = 9) -> dict:
-    positions = {}
-    for row in range(size):
-        for col in range(size):
-            positions[f"r{row + 1}c{col + 1}"] = {
-                "row": row + 1,
-                "col": col + 1,
-                "row_index": row,
-                "col_index": col,
-                "action": {"joint.pos": row * 10.0 + col},
-            }
-    return {
-        "board": {"kind": "gomoku", "size": size},
-        "coordinate_space": "lerobot_action",
-        "positions": positions,
-    }
-
-
 def test_position_tokens_are_one_based() -> None:
     move_module = _load_move_module()
 
-    assert move_module._parse_position_token("r5c6") == (4, 5)
-    assert move_module._parse_position_token("5,6") == (4, 5)
+    assert move_module.parse_position("r5c6") == (4, 5)
+    assert move_module.parse_position("5,6") == (4, 5)
 
 
-def test_move_target_resolves_local_pose_map_position_to_global_play_area() -> None:
-    move_module = _load_move_module()
-    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
-    play_area = PlayArea(row_offset=3, col_offset=3, rows=9, cols=9)
-
-    target = move_module._resolve_position_target("r5c5", mapper, play_area, "local")
-
-    assert target.map_label == "r5c5"
-    assert target.global_label == "r8c8"
-    assert target.action == {"joint.pos": 44.0}
-
-
-def test_move_target_resolves_global_position_through_play_area() -> None:
-    move_module = _load_move_module()
-    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
-    play_area = PlayArea(row_offset=3, col_offset=3, rows=9, cols=9)
-
-    target = move_module._resolve_position_target("8,8", mapper, play_area, "global")
-
-    assert target.map_label == "r5c5"
-    assert target.global_label == "r8c8"
-    assert target.action == {"joint.pos": 44.0}
-
-
-def test_waiting_action_accepts_preset_name() -> None:
-    move_module = _load_move_module()
-
-    waiting = move_module._resolve_waiting_action({"robot": {"waiting_pose": "waiting"}})
+def test_waiting_preset_is_available() -> None:
+    waiting = PRESET_ACTIONS["waiting"]
 
     assert "shoulder_pan.pos" in waiting
     assert "gripper.pos" in waiting
