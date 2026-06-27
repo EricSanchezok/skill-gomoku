@@ -49,7 +49,7 @@ def main() -> int:
     if not port:
         raise ValueError("--port is required when robot.port is missing")
     robot_id = args.robot_id or robot_cfg.get("id", DEFAULT_ROBOT_ID)
-    profile = MotionProfile(args.timeout, args.poll, None, args.tolerance)
+    profile = MotionProfile(args.duration, args.dt)
     mover = SO101SmoothMover(port=str(port), robot_id=str(robot_id), profile=profile)
     try:
         mover.connect()
@@ -73,9 +73,8 @@ def parse_args():
     p.add_argument("--config", default="config/default.yaml")
     p.add_argument("--port")
     p.add_argument("--robot-id")
-    p.add_argument("--timeout", type=float, default=20.0)
-    p.add_argument("--poll", type=float, default=0.1)
-    p.add_argument("--tolerance", type=float, default=1.0)
+    p.add_argument("--duration", type=float, default=5.0)
+    p.add_argument("--dt", type=float, default=0.01)
     p.add_argument("--release-after", action="store_true")
     p.add_argument("--dry-run", action="store_true")
     return p.parse_args()
@@ -91,9 +90,9 @@ def parse_position(text):
     return row - 1, col - 1
 
 
-def progress(i, total, error):
-    if i == 1 or i % 10 == 0 or error <= 1.0:
-        print(f"  err={error:.2f} ({i}/{total})")
+def progress(i, total, alpha):
+    if i == 1 or i % 50 == 0 or i == total:
+        print(f"  step={i}/{total}, alpha={alpha:.3f}")
 
 
 if __name__ == "__main__":

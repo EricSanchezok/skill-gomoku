@@ -1,5 +1,6 @@
 from src.robot.so101_mover import SO101SmoothMover
-mover = SO101SmoothMover(port='/dev/ttyACM0')
+
+mover = SO101SmoothMover(port="/dev/ttyACM0")
 mover.connect()
 mover.release()
 WAITING_POSE = {
@@ -13,4 +14,3 @@ WAITING_POSE = {
 mover.move_to(WAITING_POSE)
 mover.disconnect()
 print("SO101SmoothMover torque disabled.")
-

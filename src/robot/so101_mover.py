@@ -1,8 +1,8 @@
 """SO101 smooth movement helpers built around LeRobot action commands.
 
 This is the reusable part of the locally tested ``gomoku_so101`` motion script.
-It intentionally avoids writing motor speed/acceleration registers: callers send
-the final LeRobot action target once, then wait for observations to reach it.
+It intentionally avoids writing motor speed/acceleration registers: smoothness
+comes from sending intermediate LeRobot action targets at a steady cadence.
 """
 
 from __future__ import annotations
@@ -20,10 +20,9 @@ ProgressCallback = Callable[[int, int, float], None]
 
 DEFAULT_PORT = "/dev/ttyACM0"
 DEFAULT_ROBOT_ID = "so101_follower_0610"
-DEFAULT_MAX_RELATIVE_TARGET: float | None = None
+DEFAULT_MAX_RELATIVE_TARGET: float | None = 5.0
 DEFAULT_DURATION_SECONDS = 5.0
-DEFAULT_DT_SECONDS = 0.1
-DEFAULT_POSITION_TOLERANCE = 1.0
+DEFAULT_DT_SECONDS = 0.01
 LEROBOT_CLAMP_WARNING_PREFIX = "Relative goal position magnitude had to be clamped to be safe"
 
 WAITING_ACTION: Action = {
@@ -111,14 +110,6 @@ def interpolate_action(
     }
 
 
-def max_action_error(current: Mapping[str, float], target: Mapping[str, float]) -> float:
-    """Return the largest absolute joint-position error for target keys."""
-    missing = set(target) - set(current)
-    if missing:
-        raise KeyError(f"Current action is missing target keys: {sorted(missing)}")
-    return max(abs(float(target[key]) - float(current[key])) for key in target)
-
-
 def ensure_action(value: Mapping[str, float]) -> Action:
     """Validate and normalize a LeRobot action mapping."""
     if not value:
@@ -137,15 +128,12 @@ class MotionProfile:
     duration_seconds: float = DEFAULT_DURATION_SECONDS
     dt_seconds: float = DEFAULT_DT_SECONDS
     max_relative_target: float | None = DEFAULT_MAX_RELATIVE_TARGET
-    position_tolerance: float = DEFAULT_POSITION_TOLERANCE
 
     def steps(self) -> int:
         if self.duration_seconds <= 0:
             raise ValueError("duration_seconds must be positive")
         if self.dt_seconds <= 0:
             raise ValueError("dt_seconds must be positive")
-        if self.position_tolerance <= 0:
-            raise ValueError("position_tolerance must be positive")
         return max(1, int(self.duration_seconds / self.dt_seconds))
 
 
@@ -158,7 +146,7 @@ class SO101SmoothMover:
     2. Read the current pose.
     3. Send the current pose back as the hold target.
     4. Enable torque.
-    5. Send the final target and poll observations until it arrives.
+    5. Stream intermediate targets until the final target is reached.
     """
 
     def __init__(
@@ -230,22 +218,22 @@ class SO101SmoothMover:
         profile: MotionProfile | None = None,
         progress: ProgressCallback | None = None,
     ) -> Action:
-        """Send the final target once, then wait until the arm reaches it."""
-        self.release()
+        """Stream a smooth target trajectory to ``target_action``."""
         target = ensure_action(target_action)
         active_profile = profile or self.profile
-        max_polls = active_profile.steps()
+        start = self.read_action(target)
+        steps = active_profile.steps()
+
+        for idx in range(1, steps + 1):
+            alpha = smoothstep(idx / steps)
+            action = interpolate_action(start, target, alpha)
+            self.robot.send_action(action)
+            if progress is not None:
+                progress(idx, steps, alpha)
+            time.sleep(active_profile.dt_seconds)
 
         self.robot.send_action(target)
-        for idx in range(1, max_polls + 1):
-            self.robot.send_action(target)
-            current = self.read_action(target)
-            distance = max_action_error(current, target)
-            if progress is not None:
-                progress(idx, max_polls, distance)
-            if distance <= active_profile.position_tolerance:
-                return current
-            time.sleep(active_profile.dt_seconds)
+        time.sleep(0.5)
         return self.read_action(target)
 
 

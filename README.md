@@ -247,8 +247,8 @@ python scripts/move_to_board_position.py r5c5
 python scripts/move_to_board_position.py r5c5 --dry-run
 ```
 
-这个测试脚本默认不设置 `max_relative_target`，会直接发送最终目标，然后轮询等待机械臂
-运动到位。
+这个测试脚本沿用旧真机脚本的方式：从当前姿态插值到目标姿态，按固定频率连续
+`send_action()`，最后再补发一次最终目标。
 
 ### 接入吸棋气泵
 

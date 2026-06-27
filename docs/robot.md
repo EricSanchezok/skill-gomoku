@@ -121,7 +121,7 @@ python scripts/calibrate_robot_board.py --backend input
 2. 读取当前 `.pos` 姿态。
 3. 先把当前姿态写回去作为 hold target。
 4. 再开启力矩。
-5. 发送最终目标 action，然后轮询 observation 等待到位。
+5. 按固定频率连续发送插值 action，最后补发最终目标。
 6. 只在明确需要时调用 `release()` 释放力矩。
 
 测试移动到中心姿态：
@@ -150,8 +150,8 @@ python scripts/move_to_board_position.py r5c5
 python scripts/move_to_board_position.py r5c5 --dry-run
 ```
 
-这个测试脚本默认不设置 `max_relative_target`，会直接发送最终目标，然后按当前关节误差
-轮询等待到位。
+这个测试脚本沿用旧真机脚本的方式：从当前姿态插值到目标姿态，按固定频率连续
+`send_action()`，最后再补发一次最终目标。
 
 代码里可以这样用：
 
