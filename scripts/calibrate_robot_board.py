@@ -5,7 +5,7 @@ Typical SO101 usage:
 
     conda run -n lerobot python scripts/calibrate_robot_board.py \
       --backend so101 \
-      --port /dev/tty.usbmodem5A4B0487101 \
+      --port /dev/ttyACM0 \
       --robot-id so101_follower_0610
 
 Dry run without hardware:

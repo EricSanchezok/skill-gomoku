@@ -95,7 +95,7 @@ python scripts/install_lerobot_calibration.py
 ```bash
 conda run -n lerobot python scripts/replay_robot_corners.py \
   --config config/default.yaml \
-  --port /dev/tty.usbmodem5A4B0487101 \
+  --port /dev/ttyACM0 \
   --robot-id so101_follower_0610
 ```
 
@@ -128,7 +128,7 @@ python scripts/calibrate_robot_board.py --backend input
 
 ```bash
 conda run -n lerobot python -m src.robot.tools.so101_move_demo center \
-  --port /dev/tty.usbmodem5A4B0487101 \
+  --port /dev/ttyACM0 \
   --robot-id so101_follower_0610
 ```
 
@@ -144,7 +144,7 @@ conda run -n lerobot python -m src.robot.tools.so101_move_demo waiting
 from src.robot.so101_mover import SO101SmoothMover
 
 mover = SO101SmoothMover(
-    port="/dev/tty.usbmodem5A4B0487101",
+    port="/dev/ttyACM0",
     robot_id="so101_follower_0610",
 )
 
@@ -169,6 +169,15 @@ finally:
 python scripts/run_live_game.py
 ```
 
+真机默认是保守 bring-up 模式：最多跑 1 个 turn，并且每一次 SO101
+移动前都会打印目标 action 和最大关节变化，等待人工按 Enter。确认完整路径、
+棋盒位置和棋盘位置都安全后，才考虑加 `--full-game` 或 `--max-turns N`。如果要
+关闭逐步确认，必须显式加 `--no-confirm-robot-moves`。
+
+真机运行会强制检查当前机器人棋色对应的取子位。也就是说
+`robot.pickup_poses.black` 或 `robot.pickup_poses.white` 至少要录好当前棋色；
+缺失时脚本会拒绝开局，不会再从当前位置直接吸棋、乱走。
+
 建议按这个顺序上真机：
 
 ```bash
@@ -178,8 +187,11 @@ python scripts/run_live_game.py --mock-camera --dry-run-robot --disable-air-pump
 # 2. 真实相机 + AI + 键盘确认，不动机械臂/气泵
 python scripts/run_live_game.py --dry-run-robot --disable-air-pump
 
-# 3. 树莓派真机，确认 GPIO/取子位/串口都配置好后
+# 3. 树莓派真机，默认只跑一手且每段移动都要人工确认
 python scripts/run_live_game.py --enable-air-pump --port /dev/ttyACM0
+
+# 4. 确认安全后再跑完整对局
+python scripts/run_live_game.py --enable-air-pump --full-game --port /dev/ttyACM0
 ```
 
 当前仓库里的 `so101_board_81_positions.json` 是中心 9 x 9 的 81 个落点，正好对应
@@ -276,6 +288,8 @@ conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyACM0
 - 开启力矩前确认串口是当前 SO101。
 - 测试时保持 `max_relative_target` 保守。
 - 每次上力矩前先 hold 当前姿态，避免冲向旧目标。
+- 取子位没有录好时不要跑真机对局；`run_live_game.py` 会默认拒绝这种状态。
+- 新场地第一次跑保持逐步确认，不要加 `--no-confirm-robot-moves`。
 - 每个新 session 的第一步移动要慢，旁边有人看着电源和机械臂。
 - 手带标定后一般释放力矩，方便重新摆位。
 - raw register 级脚本只适合诊断具体电机问题，不建议在真实对局时运行。

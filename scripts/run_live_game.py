@@ -37,6 +37,36 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 logger = logging.getLogger("run_live_game")
 
 
+class ConfirmingRobotMover:
+    """Prompt before every real SO101 move in live-game bring-up runs."""
+
+    def __init__(
+        self,
+        delegate: SO101SmoothMover,
+        *,
+        input_fn=input,
+        print_fn=print,
+    ) -> None:
+        self._delegate = delegate
+        self._input = input_fn
+        self._print = print_fn
+
+    def move_to(self, target_pose: Mapping[str, float]) -> Any:
+        target = {str(key): float(value) for key, value in target_pose.items()}
+        self._print("\nNext SO101 move:")
+        self._print(_format_action(target))
+        try:
+            current = self._delegate.read_action(target)
+            self._print(_format_action_delta(current, target))
+        except Exception as exc:
+            self._print(f"  current/delta: unavailable ({exc})")
+
+        answer = self._input("Press Enter to execute this move, or type q to abort > ")
+        if answer.strip().lower() == "q":
+            raise KeyboardInterrupt
+        return self._delegate.move_to(target)
+
+
 def main() -> int:
     parser = _build_parser()
     args = parser.parse_args()
@@ -50,10 +80,12 @@ def main() -> int:
     config = load_config(config_path)
     _apply_cli_overrides(config, args)
     _validate_engine_path(config)
+    _validate_live_config_safety(config, args)
 
     interaction = ConsoleRobotInteraction()
     human_controller = KeyboardHumanTurnController(robot_interaction=interaction)
     mover = None
+    robot_mover = None
     orchestrator = None
 
     try:
@@ -65,18 +97,23 @@ def main() -> int:
             mover.connect()
             print("Holding current SO101 pose before starting...")
             mover.hold_current()
+            robot_mover = (
+                ConfirmingRobotMover(mover) if args.confirm_robot_moves else mover
+            )
 
         orchestrator = GameOrchestrator.from_config(
             state_extractor=extractor,
             config=config,
             config_base_dir=PROJECT_ROOT,
-            robot_mover=mover,
+            robot_mover=robot_mover,
             human_turn_controller=human_controller,
             interaction_controller=interaction,
         )
         _validate_robot_mapping(orchestrator, dry_run_robot=args.dry_run_robot)
+        _validate_live_robot_safety(orchestrator, args)
+        max_turns = _resolve_max_turns(args, orchestrator)
 
-        _confirm_start(args, config, orchestrator)
+        _confirm_start(args, config, orchestrator, max_turns=max_turns)
 
         board = orchestrator.start_new_game()
         print("Initial board:")
@@ -86,7 +123,7 @@ def main() -> int:
         turn_idx = 0
         while (
             winner == EMPTY
-            and turn_idx < args.max_turns
+            and turn_idx < max_turns
             and not orchestrator.is_play_area_full()
         ):
             turn_idx += 1
@@ -169,15 +206,36 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--duration", type=float, default=5.0, help="SO101 move duration")
     parser.add_argument("--dt", type=float, default=0.01, help="SO101 move command interval")
     parser.add_argument("--max-relative-target", type=float, default=DEFAULT_MAX_RELATIVE_TARGET)
-    parser.add_argument("--max-turns", type=int, default=225)
+    parser.add_argument(
+        "--max-turns",
+        type=int,
+        default=None,
+        help="Maximum live loop turns. Default is 1 for safer hardware bring-up.",
+    )
+    parser.add_argument(
+        "--full-game",
+        action="store_true",
+        help="Run until the configured play area is full instead of the one-turn safety default.",
+    )
     parser.add_argument("--human-attempts", type=int, default=30)
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.add_argument("--robot-settle-seconds", type=float, default=0.5)
     parser.add_argument("--no-sync-after-robot", dest="sync_after_robot", action="store_false")
+    parser.add_argument(
+        "--no-confirm-robot-moves",
+        dest="confirm_robot_moves",
+        action="store_false",
+        help="Do not prompt before each real SO101 movement.",
+    )
+    parser.add_argument(
+        "--allow-missing-pickup-pose",
+        action="store_true",
+        help="Allow live robot motion when the configured robot stone has no pickup pose.",
+    )
     parser.add_argument("--yes", action="store_true", help="Skip final start confirmation")
     parser.add_argument("--release-on-exit", action="store_true")
     parser.add_argument("--verbose", action="store_true")
-    parser.set_defaults(sync_after_robot=True)
+    parser.set_defaults(sync_after_robot=True, confirm_robot_moves=True)
     return parser
 
 
@@ -272,10 +330,76 @@ def _validate_robot_mapping(orchestrator: GameOrchestrator, *, dry_run_robot: bo
     )
 
 
+def _validate_live_robot_safety(
+    orchestrator: GameOrchestrator,
+    args: argparse.Namespace,
+) -> None:
+    if args.dry_run_robot:
+        return
+
+    if orchestrator.waiting_pose is None:
+        raise ValueError(
+            "robot.waiting_pose is required for live robot runs. "
+            "It keeps the arm out of the camera and routes motion through a known pose."
+        )
+
+    pickup_pose = orchestrator.pickup_poses.get(orchestrator.robot_stone, orchestrator.pickup_pose)
+    if pickup_pose is None and not args.allow_missing_pickup_pose:
+        raise ValueError(
+            "Missing pickup pose for the robot stone. Record it first with "
+            "`python scripts/record_pickup_poses.py`, or pass "
+            "--allow-missing-pickup-pose only for deliberate dry movement tests."
+        )
+
+
+def _validate_live_config_safety(
+    config: Mapping[str, Any],
+    args: argparse.Namespace,
+) -> None:
+    if args.dry_run_robot:
+        return
+
+    robot_cfg = config.get("robot", {})
+    if not isinstance(robot_cfg, Mapping):
+        robot_cfg = {}
+    game_cfg = config.get("game", {})
+    if not isinstance(game_cfg, Mapping):
+        game_cfg = {}
+
+    if robot_cfg.get("waiting_pose", "waiting") is None:
+        raise ValueError(
+            "robot.waiting_pose is required for live robot runs before hardware startup."
+        )
+
+    robot_stone = str(game_cfg.get("robot_stone", game_cfg.get("my_stone", "black"))).lower()
+    pickup_pose = None
+    pickup_poses = robot_cfg.get("pickup_poses")
+    if isinstance(pickup_poses, Mapping):
+        pickup_pose = pickup_poses.get(robot_stone)
+    pickup_pose = pickup_pose or robot_cfg.get("pickup_pose")
+    if pickup_pose is None and not args.allow_missing_pickup_pose:
+        raise ValueError(
+            "Missing pickup pose for the configured robot stone before hardware startup. "
+            "Run `python scripts/record_pickup_poses.py` first."
+        )
+
+
+def _resolve_max_turns(args: argparse.Namespace, orchestrator: GameOrchestrator) -> int:
+    if args.max_turns is not None:
+        if args.max_turns <= 0:
+            raise ValueError("--max-turns must be positive")
+        return args.max_turns
+    if args.full_game:
+        return orchestrator.play_area.rows * orchestrator.play_area.cols
+    return 1
+
+
 def _confirm_start(
     args: argparse.Namespace,
     config: Mapping[str, Any],
     orchestrator: GameOrchestrator,
+    *,
+    max_turns: int,
 ) -> None:
     if args.yes:
         return
@@ -295,6 +419,11 @@ def _confirm_start(
     print(f"  robot: {'dry-run' if args.dry_run_robot else 'enabled'}")
     print(f"  air_pump: {'enabled' if pump_enabled else 'disabled'}")
     print(f"  play_area: {orchestrator.play_area.describe()}")
+    print(f"  max_turns: {max_turns}")
+    print(
+        "  per_move_confirm: "
+        f"{'enabled' if args.confirm_robot_moves and not args.dry_run_robot else 'disabled'}"
+    )
     print(f"  rapfi: {ai_cfg.get('engine_path') or resolve_rapfi_engine_path()}")
     confirm = input("Press Enter to start, or type q to cancel > ").strip().lower()
     if confirm == "q":
@@ -314,6 +443,28 @@ def _project_path(value: str) -> Path:
     if path.is_absolute():
         return path
     return PROJECT_ROOT / path
+
+
+def _format_action(action: Mapping[str, float]) -> str:
+    return "\n".join(f"  {key}: {float(action[key]):.3f}" for key in sorted(action))
+
+
+def _format_action_delta(
+    current: Mapping[str, float],
+    target: Mapping[str, float],
+    *,
+    limit: int = 3,
+) -> str:
+    deltas = {
+        key: float(target[key]) - float(current[key])
+        for key in target
+        if key in current
+    }
+    if not deltas:
+        return "  current/delta: unavailable"
+    biggest = sorted(deltas.items(), key=lambda item: abs(item[1]), reverse=True)[:limit]
+    summary = ", ".join(f"{key} {delta:+.2f}" for key, delta in biggest)
+    return f"  largest joint deltas: {summary}"
 
 
 if __name__ == "__main__":

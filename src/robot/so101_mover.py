@@ -18,7 +18,7 @@ from src.robot.lerobot_calibration import install_bundled_lerobot_calibration
 Action = dict[str, float]
 ProgressCallback = Callable[[int, int, float], None]
 
-DEFAULT_PORT = "/dev/tty.usbmodem5A4B0487101"
+DEFAULT_PORT = "/dev/ttyACM0"
 DEFAULT_ROBOT_ID = "so101_follower_0610"
 DEFAULT_MAX_RELATIVE_TARGET = 5.0
 DEFAULT_DURATION_SECONDS = 5.0

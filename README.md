@@ -214,7 +214,7 @@ python scripts/calibrate_board.py
 ```bash
 conda run -n lerobot python scripts/replay_robot_corners.py \
   --config config/default.yaml \
-  --port /dev/tty.usbmodem5A4B0487101 \
+  --port /dev/ttyACM0 \
   --robot-id so101_follower_0610
 ```
 
@@ -287,12 +287,22 @@ python scripts/run_live_game.py \
   --disable-air-pump
 ```
 
-在树莓派上真机运行时，确认 `robot.port`、`robot.pickup_pose`、`robot.waiting_pose`、气泵 GPIO、
-相机角点和 Rapfi Linux 二进制都准备好，再运行：
+在树莓派上真机运行时，确认 `robot.port`、`robot.pickup_poses.black/white`、
+`robot.waiting_pose`、气泵 GPIO、相机角点和 Rapfi Linux 二进制都准备好，再运行：
 
 ```bash
 python scripts/run_live_game.py \
   --enable-air-pump \
+  --port /dev/ttyACM0
+```
+
+真机默认是安全 bring-up：最多跑 1 个 turn，每次 SO101 移动前都需要人工确认。
+确认棋盒、棋盘和路径都没问题后，再显式跑完整对局：
+
+```bash
+python scripts/run_live_game.py \
+  --enable-air-pump \
+  --full-game \
   --port /dev/ttyACM0
 ```
 
@@ -307,6 +317,9 @@ python scripts/run_live_game.py --dry-run-robot --enable-air-pump --dry-run-air-
 
 # 显式指定树莓派上的 Rapfi
 python scripts/run_live_game.py --engine-path bin/rapfi/linux-aarch64/rapfi
+
+# 已确认路径安全后，关闭每段机械臂移动前的确认
+python scripts/run_live_game.py --enable-air-pump --full-game --no-confirm-robot-moves
 ```
 
 ### 测试感知管线

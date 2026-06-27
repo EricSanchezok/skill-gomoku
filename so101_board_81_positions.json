@@ -9,7 +9,7 @@
   },
   "coordinate_space": "lerobot_action",
   "created_at": 1781704215.899881,
-  "port": "/dev/tty.usbmodem5A4B0487101",
+  "port": "/dev/ttyACM0",
   "positions": {
     "r1c1": {
       "action": {
