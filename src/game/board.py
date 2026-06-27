@@ -1,10 +1,8 @@
 """棋盘状态与游戏规则."""
 
-from typing import Sequence
-
 import numpy as np
 
-from src.utils.constants import BLACK, BOARD_COLS, BOARD_ROWS, EMPTY, WHITE
+from src.utils.constants import BLACK, BOARD_COLS, BOARD_ROWS, EMPTY
 
 
 class Board:

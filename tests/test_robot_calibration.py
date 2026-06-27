@@ -324,6 +324,84 @@ def test_orchestrator_executes_pick_move_drop_sequence_with_suction() -> None:
     ]
 
 
+def test_orchestrator_uses_pickup_pose_for_robot_stone_colour() -> None:
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+    events = []
+    black_pickup = {"joint.pos": -10.0, "gripper.pos": 1.0}
+    white_pickup = {"joint.pos": -20.0, "gripper.pos": 2.0}
+
+    class FakeMover:
+        def move_to(self, target_pose):
+            events.append(("move", dict(target_pose)))
+            return dict(target_pose)
+
+    class FakeSuction:
+        def pick_stone(self) -> None:
+            events.append(("pick",))
+
+        def drop_stone(self) -> None:
+            events.append(("drop",))
+
+        def off(self) -> None:
+            events.append(("off",))
+
+    orchestrator = GameOrchestrator(
+        state_extractor=object(),
+        pose_mapper=mapper,
+        robot_mover=FakeMover(),
+        suction_controller=FakeSuction(),
+        pickup_poses={1: black_pickup, 2: white_pickup},
+        my_stone=WHITE,
+    )
+
+    orchestrator.execute_my_move(1, 1)
+
+    assert events[0] == ("move", white_pickup)
+    assert ("move", black_pickup) not in events
+
+
+def test_orchestrator_uses_waiting_pose_between_pick_and_place() -> None:
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+    events = []
+    pickup_pose = {"joint.pos": -10.0, "gripper.pos": 0.0}
+    waiting_pose = {"joint.pos": -5.0, "gripper.pos": 1.0}
+
+    class FakeMover:
+        def move_to(self, target_pose):
+            events.append(("move", dict(target_pose)))
+            return dict(target_pose)
+
+    class FakeSuction:
+        def pick_stone(self) -> None:
+            events.append(("pick",))
+
+        def drop_stone(self) -> None:
+            events.append(("drop",))
+
+        def off(self) -> None:
+            events.append(("off",))
+
+    orchestrator = GameOrchestrator(
+        state_extractor=object(),
+        pose_mapper=mapper,
+        robot_mover=FakeMover(),
+        suction_controller=FakeSuction(),
+        pickup_pose=pickup_pose,
+        waiting_pose=waiting_pose,
+    )
+
+    orchestrator.execute_my_move(1, 1)
+
+    assert events == [
+        ("move", pickup_pose),
+        ("pick",),
+        ("move", waiting_pose),
+        ("move", {"joint.pos": 160.0, "gripper.pos": 2.0}),
+        ("drop",),
+        ("move", waiting_pose),
+    ]
+
+
 def test_orchestrator_turns_suction_off_if_move_fails_after_pick() -> None:
     mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
     events = []

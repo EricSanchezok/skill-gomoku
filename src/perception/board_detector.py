@@ -119,10 +119,11 @@ class BoardDetector:
 
         h_lines, v_lines = self._detect_grid_lines(warped)
 
-        grid_cell_size = float(dst) / float(BOARD_ROWS)
-        if len(h_lines) >= BOARD_ROWS + 1 and len(v_lines) >= BOARD_COLS + 1:
+        grid_cell_size = float(dst - 1) / float(BOARD_ROWS - 1)
+        if len(h_lines) >= BOARD_ROWS and len(v_lines) >= BOARD_COLS:
             grid_cell_size = (
-                (h_lines[-1] - h_lines[0]) / BOARD_ROWS + (v_lines[-1] - v_lines[0]) / BOARD_COLS
+                (h_lines[-1] - h_lines[0]) / (BOARD_ROWS - 1)
+                + (v_lines[-1] - v_lines[0]) / (BOARD_COLS - 1)
             ) / 2.0
 
         cells = self._compute_grid_cells(h_lines, v_lines, dst)
@@ -303,9 +304,7 @@ class BoardDetector:
             elif 80 < angle < 100:
                 v_mids.append(int((x1 + x2) / 2))
 
-        return self._cluster_lines(h_mids, BOARD_ROWS + 1), self._cluster_lines(
-            v_mids, BOARD_COLS + 1
-        )
+        return self._cluster_lines(h_mids, BOARD_ROWS), self._cluster_lines(v_mids, BOARD_COLS)
 
     @staticmethod
     def _cluster_lines(midpoints, expected):
@@ -324,20 +323,52 @@ class BoardDetector:
                 r.append(int(np.median(b)))
         return r
 
-    # ---- Internal: grid cells ----------------------------------------------
+    # ---- Internal: board-position hit boxes --------------------------------
 
     def _compute_grid_cells(self, h_lines, v_lines, dst_size):
         cells = []
-        if len(h_lines) >= BOARD_ROWS + 1 and len(v_lines) >= BOARD_COLS + 1:
-            hp = h_lines[: BOARD_ROWS + 1]
-            vp = v_lines[: BOARD_COLS + 1]
+        if len(h_lines) >= BOARD_ROWS and len(v_lines) >= BOARD_COLS:
+            hp = h_lines[:BOARD_ROWS]
+            vp = v_lines[:BOARD_COLS]
         else:
-            step = float(dst_size) / BOARD_ROWS
-            hp = [int(round(i * step)) for i in range(BOARD_ROWS + 1)]
-            vp = [int(round(i * step)) for i in range(BOARD_COLS + 1)]
+            row_step = float(dst_size - 1) / float(BOARD_ROWS - 1)
+            col_step = float(dst_size - 1) / float(BOARD_COLS - 1)
+            hp = [int(round(i * row_step)) for i in range(BOARD_ROWS)]
+            vp = [int(round(i * col_step)) for i in range(BOARD_COLS)]
+
+        h_bounds = _position_bounds(hp)
+        v_bounds = _position_bounds(vp)
         for r in range(BOARD_ROWS):
             row = []
             for c in range(BOARD_COLS):
-                row.append((vp[c], hp[r], vp[c + 1] - vp[c], hp[r + 1] - hp[r]))
+                left, right = v_bounds[c]
+                top, bottom = h_bounds[r]
+                row.append((left, top, right - left, bottom - top))
             cells.append(row)
         return cells
+
+
+def _position_bounds(lines: list[int]) -> list[tuple[int, int]]:
+    """Return hit-box bounds centered on Gomoku intersection lines.
+
+    A 15-line Gomoku board has 14 square intervals.  The playable positions are
+    intersections, not square centers, so each hit box is centered on one line
+    and extends halfway to neighboring lines.
+    """
+
+    bounds = []
+    for idx, center in enumerate(lines):
+        if idx == 0:
+            half_left = (lines[1] - center) / 2.0
+        else:
+            half_left = (center - lines[idx - 1]) / 2.0
+
+        if idx == len(lines) - 1:
+            half_right = (center - lines[idx - 1]) / 2.0
+        else:
+            half_right = (lines[idx + 1] - center) / 2.0
+
+        left = int(round(center - half_left))
+        right = int(round(center + half_right))
+        bounds.append((left, right))
+    return bounds

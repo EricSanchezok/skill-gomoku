@@ -50,7 +50,13 @@ robot:
   pose_map:
     method: measured
     path: so101_board_81_positions.json
+  # Legacy fallback used when robot.pickup_poses.<black|white> is not set.
   pickup_pose: null
+  # Fill these with the two stone-supply pickup poses after recording them.
+  pickup_poses:
+    black: null
+    white: null
+  waiting_pose: waiting
   air_pump:
     enabled: false
     dry_run: false
@@ -68,5 +74,30 @@ robot:
     coordinate_space: lerobot_action
     corners: {}
 game:
+  robot_stone: black
+  # Deprecated compatibility alias for older code paths.
   my_stone: black
+  # The camera still recognises the full 15x15 intersections, but real robot
+  # play is limited to the centered 9x9 window covered by the 81-position map.
+  play_area:
+    rows: 9
+    cols: 9
+    row_offset: 3
+    col_offset: 3
   ai_level: basic
+  ai:
+    # null = auto-select bin/rapfi/<platform>/rapfi.
+    engine_path: null
+    # null = derive from game.play_area; centered 9x9 starts Rapfi as a 9x9 game.
+    board_size: null
+    time_per_move_ms: 3000
+interaction:
+  human_done:
+    mode: keyboard
+    confirm_keys:
+    - enter
+    - space
+    speak_key: s
+    dance_key: d
+    skill_gomoku_key: g
+    quit_key: q

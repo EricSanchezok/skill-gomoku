@@ -11,16 +11,21 @@
 - `src/robot/so101_adapter.py`：标定时读取 SO101 当前 LeRobot action 姿态。
 - `src/robot/so101_mover.py`：从本地测试工具提炼出的 SO101 平滑移动封装。
 - `src/robot/air_pump.py`：气泵/电磁阀吸棋控制，供主流程调用。
+- `src/interaction.py`：人类确认落子，以及机器人说话、跳舞、调用 skill 的接口。
 - `src/robot/tools/so101_move_demo.py`：移动到 `center` / `waiting` 预设的小工具。
 - `scripts/install_lerobot_calibration.py`：显式恢复 `so101_follower_0610` 的 LeRobot 标定。
 - `scripts/replay_robot_corners.py`：按实测姿态表依次恢复棋盘四角。
 - `scripts/calibrate_robot_board.py`：把棋盘四角标定结果写入 YAML 配置。
+- `scripts/run_live_game.py`：相机、Rapfi、键盘确认、SO101、气泵的完整对局入口。
+- `bin/rapfi/`：按平台存放 Rapfi，可自动选择 macOS 或 Raspberry Pi 版本。
 
 `gomoku_so101` 里的旧 raw tick 实验、大体量 Web UI 和 `old_scripts` 没有原样搬进主包。它们适合硬件 bring-up 和诊断，但不适合成为主对弈流程的运行依赖。
 
 ## 坐标空间
 
-视觉模块使用 15 x 15 棋盘上的 `(row, col)` 坐标。SO101 这边使用 LeRobot action 字典，例如：
+视觉模块使用 15 x 15 落子交叉点上的 `(row, col)` 坐标。这里的 15 x 15
+不是物理方格数；五子棋的物理方格间隔是 14 x 14。SO101 这边使用
+LeRobot action 字典，例如：
 
 ```python
 {
@@ -36,6 +41,30 @@
 当前主流程使用实测姿态表，不再用四角双线性插值推算落点。`robot.pose_map.path`
 指向的 JSON 里，每个抽象棋位都有一组录好的 action。主流程调用
 `MeasuredBoardPoseMapper.target_for_cell(row, col)` 直接查表返回目标 action。
+
+## Rapfi 二进制
+
+Rapfi 按平台放在独立目录：
+
+```text
+bin/rapfi/macos-arm64/rapfi
+bin/rapfi/linux-aarch64/rapfi
+```
+
+代码默认按当前平台自动选择。树莓派队友重新编译好的 Linux ARM64 版放到
+`bin/rapfi/linux-aarch64/rapfi`，并确保可执行：
+
+```bash
+chmod +x bin/rapfi/linux-aarch64/rapfi
+```
+
+如果要临时使用其他路径，可以在配置里写：
+
+```yaml
+game:
+  ai:
+    engine_path: /path/to/rapfi
+```
 
 ## LeRobot 电机标定
 
@@ -130,14 +159,75 @@ finally:
 ## 接入对弈流程
 
 `GameOrchestrator.from_config()` 会优先加载 `robot.pose_map.path` 指向的实测姿态表。
-我方落子时，`GameOrchestrator.execute_my_move(row, col)` 会直接查表得到目标
-action。若构造 orchestrator 时传入 `robot_mover=SO101SmoothMover(...)`，它会把这个
-target 交给 `SO101SmoothMover.move_to()`。
+默认配置下，相机和棋局状态仍是 15 x 15 落子交叉点，但机器人只在中心 9 x 9
+活动窗口里下棋。AI 看到的是这个 9 x 9 局部棋盘；返回的局部坐标会映射回
+15 x 15 棋盘上的真实交叉点，再查 81 点实测姿态表。
+
+完整入口脚本是：
+
+```bash
+python scripts/run_live_game.py
+```
+
+建议按这个顺序上真机：
+
+```bash
+# 1. 只跑主循环，不动机械臂/气泵
+python scripts/run_live_game.py --mock-camera --dry-run-robot --disable-air-pump
+
+# 2. 真实相机 + AI + 键盘确认，不动机械臂/气泵
+python scripts/run_live_game.py --dry-run-robot --disable-air-pump
+
+# 3. 树莓派真机，确认 GPIO/取子位/串口都配置好后
+python scripts/run_live_game.py --enable-air-pump --port /dev/ttyUSB0
+```
+
+当前仓库里的 `so101_board_81_positions.json` 是中心 9 x 9 的 81 个落点，正好对应
+默认 `game.play_area`。`run_live_game.py` 会接受 9 x 9 活动窗口姿态表；如果以后要让
+机器人覆盖完整 15 x 15 落子交叉点，才需要重新录入 225 个落点并调整配置。
+
+棋色由 `game.robot_stone` 明确配置：
+
+```yaml
+game:
+  robot_stone: black  # black=机器人先手；white=人类先手
+  play_area:
+    rows: 9
+    cols: 9
+    row_offset: 3
+    col_offset: 3
+```
+
+黑棋永远先手。主流程用 `next_turn_stone()`、`is_robot_turn()` 和
+`is_human_turn()` 判断当前该谁行动；旧的 `game.my_stone` 仍然兼容，但建议只改
+`robot_stone`。
+
+人类回合可以接 `KeyboardHumanTurnController`：人下完棋后按 `Enter/Space`，
+主流程才拍照并检测新增棋子。默认还预留这些键位：
+
+```text
+Enter/Space  人类已下完
+s            机器人说话
+d            机器人跳舞
+g            调用 skill-gomoku 钩子
+q            退出等待
+```
+
+语音、动作和外部 skill 接口都挂在 `RobotInteractionController` 上。现在仓库里有
+`NullRobotInteraction` 和 `ConsoleRobotInteraction` 占位实现；真机动作库接好后，
+只需要替换这个 controller：
+
+```python
+orchestrator.robot_say("我来想一下")
+orchestrator.robot_dance("win")
+orchestrator.robot_use_skill_gomoku({"phase": "midgame"})
+```
 
 气泵吸棋也已经接入 `execute_my_move()`。启用方式：
 
 ```yaml
 robot:
+  # Legacy fallback. Prefer pickup_poses.black / pickup_poses.white.
   pickup_pose:
     shoulder_pan.pos: 0.0
     shoulder_lift.pos: 0.0
@@ -145,6 +235,10 @@ robot:
     wrist_flex.pos: 0.0
     wrist_roll.pos: 0.0
     gripper.pos: 0.0
+  pickup_poses:
+    black: null
+    white: null
+  waiting_pose: waiting
   air_pump:
     enabled: true
     valve_pin: 20
@@ -161,10 +255,21 @@ robot:
 
 所以完整落子顺序是：
 
-1. 如果配置了 `robot.pickup_pose`，先移动到取子位。
+1. 按机器人棋色移动到 `robot.pickup_poses.black` 或 `robot.pickup_poses.white`；如果没有配置对应棋色，退回旧的 `robot.pickup_pose`。
 2. 调用气泵 `pick_stone()`，建立吸力。
-3. 移动到目标棋位 action。
-4. 调用气泵 `drop_stone()`，关阀落子并关泵。
+3. 移动到 `robot.waiting_pose`，确保转场稳定。
+4. 移动到目标棋位 action。
+5. 调用气泵 `drop_stone()`，关阀落子并关泵。
+6. 回到 `robot.waiting_pose`，避免挡住相机。
+
+完整对局节奏是：抓棋子 → `waiting_pose` → 下棋的位置 → `waiting_pose` →
+人类下棋 → 人类确认 → 视觉识别 → AI 分析 → 再抓棋子。
+
+录黑/白两个取子位：
+
+```bash
+conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyUSB0
+```
 
 ## 安全检查
 
