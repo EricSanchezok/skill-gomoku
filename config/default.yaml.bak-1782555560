@@ -50,22 +50,12 @@ robot:
   pose_map:
     method: measured
     path: so101_board_81_positions.json
+  # Legacy fallback used when robot.pickup_poses.<black|white> is not set.
   pickup_pose: null
+  # Fill these with the two stone-supply pickup poses after recording them.
   pickup_poses:
-    black:
-      shoulder_pan.pos: -78.32967032967034
-      shoulder_lift.pos: 97.23076923076923
-      elbow_flex.pos: -82.41758241758242
-      wrist_flex.pos: 84.08791208791209
-      wrist_roll.pos: 0.4835164835164835
-      gripper.pos: 0.0
-    white:
-      shoulder_pan.pos: -45.714285714285715
-      shoulder_lift.pos: 115.51648351648352
-      elbow_flex.pos: -101.05494505494505
-      wrist_flex.pos: 57.97802197802198
-      wrist_roll.pos: 0.21978021978021978
-      gripper.pos: 11.86675919500347
+    black: null
+    white: null
   waiting_pose: waiting
   air_pump:
     enabled: false
@@ -85,7 +75,10 @@ robot:
     corners: {}
 game:
   robot_stone: black
+  # Deprecated compatibility alias for older code paths.
   my_stone: black
+  # The camera still recognises the full 15x15 intersections, but real robot
+  # play is limited to the centered 9x9 window covered by the 81-position map.
   play_area:
     rows: 9
     cols: 9
@@ -93,7 +86,9 @@ game:
     col_offset: 3
   ai_level: basic
   ai:
+    # null = auto-select bin/rapfi/<platform>/rapfi.
     engine_path: null
+    # null = derive from game.play_area; centered 9x9 starts Rapfi as a 9x9 game.
     board_size: null
     time_per_move_ms: 3000
 interaction:
