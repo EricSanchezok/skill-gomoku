@@ -231,17 +231,19 @@ class SO101SmoothMover:
         progress: ProgressCallback | None = None,
     ) -> Action:
         """Send the final target once, then wait until the arm reaches it."""
+        self.release()
         target = ensure_action(target_action)
         active_profile = profile or self.profile
         max_polls = active_profile.steps()
 
         self.robot.send_action(target)
         for idx in range(1, max_polls + 1):
+            self.robot.send_action(target)
             current = self.read_action(target)
-            error = max_action_error(current, target)
+            distance = max_action_error(current, target)
             if progress is not None:
-                progress(idx, max_polls, error)
-            if error <= active_profile.position_tolerance:
+                progress(idx, max_polls, distance)
+            if distance <= active_profile.position_tolerance:
                 return current
             time.sleep(active_profile.dt_seconds)
         return self.read_action(target)
