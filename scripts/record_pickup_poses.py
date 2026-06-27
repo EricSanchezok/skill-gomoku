@@ -6,7 +6,7 @@ back to legacy ``robot.pickup_pose`` only when the colour-specific pose is not
 configured.
 
 Example:
-  conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyUSB0
+  conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyACM0
 """
 
 from __future__ import annotations

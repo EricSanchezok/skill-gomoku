@@ -41,7 +41,7 @@ stone_detection:
   white_inner_mean: 75.0
   white_contrast: 10.0
 robot:
-  port: /dev/ttyUSB0
+  port: /dev/ttyACM0
   baudrate: 115200
   id: so101_follower_0610
   z_height: 50.0

@@ -272,7 +272,7 @@ robot:
 录黑/白两个取子位：
 
 ```bash
-conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyUSB0
+conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyACM0
 ```
 
 机器人控制、SO101 平滑移动工具和安全检查见 `docs/robot.md`。
@@ -293,7 +293,7 @@ python scripts/run_live_game.py \
 ```bash
 python scripts/run_live_game.py \
   --enable-air-pump \
-  --port /dev/ttyUSB0
+  --port /dev/ttyACM0
 ```
 
 常用调试参数：
