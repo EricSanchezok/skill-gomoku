@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """棋盘四角标定工具。
 
-打开相机，请用户依次点击棋盘四个角点（左上→右上→右下→左下），
+打开相机，请用户依次点击棋盘最外侧四个落子交叉点（左上→右上→右下→左下），
 预览透视矫正效果，确认后把角点坐标写入配置文件。
 
 用法:
     source .venv/bin/activate && python scripts/calibrate_board.py
 
 操作:
-    点击 4 次选择四角 → 按 'y' 确认 → 自动保存到 config/default.yaml
+    点击 4 次选择最外侧四个落子交叉点 → 按 'y' 确认 → 自动保存到 config/default.yaml
     按 'r' 重选，按 'q' 退出。
 """
 
@@ -25,7 +25,7 @@ import yaml
 from src.perception.camera import WebCamera
 from src.utils.config_loader import load_config
 
-WINDOW = "Board Calibration — click 4 corners: TL → TR → BR → BL"
+WINDOW = "Board Calibration"
 CORNER_LABELS = ["top_left", "top_right", "bottom_right", "bottom_left"]
 DST_SIZE = 600
 WARP_OFFSET = 680  # warp 预览窗口在原图右侧的 x 偏移
@@ -56,7 +56,7 @@ def run_calibration(config_path: str) -> None:
     print("棋盘四角标定工具")
     print("=" * 60)
     print()
-    print("请按顺序点击棋盘四角：")
+    print("请按顺序点击棋盘最外侧四个落子交叉点：")
     print("  1. 左上 (top_left)")
     print("  2. 右上 (top_right)")
     print("  3. 右下 (bottom_right)")
@@ -121,8 +121,8 @@ def run_calibration(config_path: str) -> None:
                         ],
                         dtype=np.float32,
                     )
-                    M = cv2.getPerspectiveTransform(src, dst)
-                    warped = cv2.warpPerspective(color, M, (DST_SIZE, DST_SIZE))
+                    transform = cv2.getPerspectiveTransform(src, dst)
+                    warped = cv2.warpPerspective(color, transform, (DST_SIZE, DST_SIZE))
 
                     # 纠正 90° 旋转（如果用户选点的顺序使 warp 旋转了）
                     # 不做自动修正，信任用户按正确顺序点击
@@ -145,9 +145,9 @@ def run_calibration(config_path: str) -> None:
                         1,
                     )
 
-                    # 画 15×15 网格辅助线到 warp 预览上
-                    grid_step = DST_SIZE / 15
-                    for i in range(16):
+                    # 画 15×15 落子交叉点对应的 15 条线；物理方格是 14×14。
+                    grid_step = (DST_SIZE - 1) / 14
+                    for i in range(15):
                         pos = int(i * grid_step)
                         cv2.line(canvas, (w + pos, 0), (w + pos, DST_SIZE), (0, 255, 255), 1)
                         cv2.line(canvas, (w, pos), (w + DST_SIZE, pos), (0, 255, 255), 1)
@@ -183,7 +183,7 @@ def run_calibration(config_path: str) -> None:
                 confirmed = True
                 # 保存到配置文件
                 config_path_obj = Path(config_path)
-                with open(config_path_obj, "r") as f:
+                with open(config_path_obj) as f:
                     yaml_data = yaml.safe_load(f)
 
                 if "board" not in yaml_data:

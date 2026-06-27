@@ -5,7 +5,7 @@
     2. 对每个候选圆，取内圈 vs 背景环的灰度对比，区分黑白：
        - 白子：内圈亮度显著高于局部背景
        - 黑子：内圈亮度低于或接近局部背景
-    3. 把每个圆分配到最近的 15×15 网格单元格。
+    3. 把每个圆分配到最近的 15×15 落子交叉点。
 
 该方法只依赖形状和局部对比度，对光照变化和棋盘底色鲁棒。
 """
@@ -17,7 +17,7 @@ import logging
 import cv2
 import numpy as np
 
-from src.utils.constants import BLACK, BOARD_COLS, BOARD_ROWS, EMPTY, WHITE
+from src.utils.constants import BLACK, BOARD_COLS, BOARD_ROWS, WHITE
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +58,11 @@ class StoneDetector:
         warped_board: np.ndarray,
         cells: list[list[tuple[int, int, int, int]]],
     ) -> np.ndarray:
-        """检测矫正棋盘上所有格子的棋子。
+        """检测矫正棋盘上所有落子点的棋子。
 
         Args:
             warped_board: 俯视矫正 BGR 棋盘图 (H, W, 3)。
-            cells: 15×15 网格单元格 (x, y, w, h)。
+            cells: 15×15 交叉点命中区 (x, y, w, h)。
 
         Returns:
             (15, 15) int8 矩阵: 0=空 1=黑 2=白。
@@ -121,7 +121,7 @@ class StoneDetector:
     def _compute_cell_centers(
         cells: list[list[tuple[int, int, int, int]]],
     ) -> list[list[tuple[float, float]]]:
-        """从 cell 列表构建中心坐标矩阵."""
+        """从交叉点命中区构建交叉点中心坐标矩阵."""
         centers = []
         for r in range(BOARD_ROWS):
             row = []
@@ -160,7 +160,7 @@ class StoneDetector:
         cell_centers: list[list[tuple[float, float]]],
         max_dist_sq: float,
     ) -> tuple[int, int] | tuple[None, None]:
-        """将圆心坐标分配到最近的网格单元格."""
+        """将圆心坐标分配到最近的落子交叉点."""
         best_row, best_col = None, None
         best_dist = max_dist_sq
         for r in range(BOARD_ROWS):

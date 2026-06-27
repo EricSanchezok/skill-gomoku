@@ -51,9 +51,9 @@ def run_single(extractor: StateExtractor, save_dir: str | None = None) -> np.nda
     logger.info("拍照中...")
     board, delta = extractor.extract()
 
-    logger.info(
-        f"棋盘状态 ({BLACK}●={np.count_nonzero(board == BLACK)}, {WHITE}○={np.count_nonzero(board == WHITE)})"
-    )
+    black_count = int(np.count_nonzero(board == BLACK))
+    white_count = int(np.count_nonzero(board == WHITE))
+    logger.info("棋盘状态 (%d●=%d, %d○=%d)", BLACK, black_count, WHITE, white_count)
     print_board(board)
 
     if delta is not None:
@@ -94,9 +94,8 @@ def run_interactive(extractor: StateExtractor) -> None:
                 if delta is not None:
                     r, c, stone = delta
                     stone_name = "●" if stone == BLACK else "○"
-                    print(
-                        f"  新落子: ({r:2d}, {c:2d}) {stone_name}  (共 {np.count_nonzero(board != EMPTY)} 子)"
-                    )
+                    total = int(np.count_nonzero(board != EMPTY))
+                    print(f"  新落子: ({r:2d}, {c:2d}) {stone_name}  (共 {total} 子)")
 
         cv2.imshow(window, display)
         key = cv2.waitKey(30) & 0xFF

@@ -2,11 +2,25 @@
 
 import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
-from src.game.ai import ai_decide, ai_reset
+import numpy as np
+
+from src.game.ai import PROJECT_ROOT, ai_decide, ai_reset, configure_ai_from_config
 from src.game.board import Board, check_win
+from src.game.play_area import PlayArea, parse_play_area_config
+from src.interaction import (
+    HumanTurnCommand,
+    HumanTurnController,
+    NullRobotInteraction,
+    RobotInteractionController,
+    stone_name,
+)
+from src.perception.board_calibration import board_frame_required, load_board_frame_calibration
 from src.perception.state_extractor import StateExtractor
+from src.robot.air_pump import SuctionController, create_suction_controller_from_config
 from src.robot.calibration import (
     ManualPoseSampler,
     get_robot_z_height,
@@ -16,9 +30,19 @@ from src.robot.calibration import (
 )
 from src.robot.controller import CalibrationPoints, RobotPose, board_to_robot_pose
 from src.robot.pose_mapper import BoardPoseMapper, RobotPoseMover, load_pose_mapper_from_config
+from src.robot.so101_mover import PRESET_ACTIONS
 from src.utils.constants import BLACK, EMPTY, WHITE
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class RobotMoveTargets:
+    """Resolved robot poses used by one physical placement sequence."""
+
+    pickup_pose: dict[str, float] | None = None
+    pickup_poses: dict[int, dict[str, float]] | None = None
+    waiting_pose: dict[str, float] | None = None
 
 
 class GameOrchestrator:
@@ -36,6 +60,13 @@ class GameOrchestrator:
         z_height: float | None = None,
         pose_mapper: BoardPoseMapper | None = None,
         robot_mover: RobotPoseMover | None = None,
+        suction_controller: SuctionController | None = None,
+        pickup_pose: Mapping[str, float] | None = None,
+        pickup_poses: Mapping[int, Mapping[str, float]] | None = None,
+        waiting_pose: Mapping[str, float] | None = None,
+        play_area: PlayArea | None = None,
+        human_turn_controller: HumanTurnController | None = None,
+        interaction_controller: RobotInteractionController | None = None,
         my_stone: int = BLACK,
     ):
         self.extractor = state_extractor
@@ -43,8 +74,26 @@ class GameOrchestrator:
         self.z_height = z_height
         self.pose_mapper = pose_mapper
         self.robot_mover = robot_mover
-        self.my_stone = my_stone
-        self.opponent = WHITE if my_stone == BLACK else BLACK
+        self.suction_controller = suction_controller
+        self.move_targets = RobotMoveTargets(
+            pickup_pose=dict(pickup_pose) if pickup_pose is not None else None,
+            pickup_poses=(
+                {int(stone): dict(pose) for stone, pose in pickup_poses.items()}
+                if pickup_poses is not None
+                else None
+            ),
+            waiting_pose=dict(waiting_pose) if waiting_pose is not None else None,
+        )
+        self.pickup_pose = self.move_targets.pickup_pose
+        self.pickup_poses = self.move_targets.pickup_poses or {}
+        self.waiting_pose = self.move_targets.waiting_pose
+        self.play_area = play_area or PlayArea.full()
+        self.robot_stone = my_stone
+        self.my_stone = self.robot_stone
+        self.human_stone = WHITE if self.robot_stone == BLACK else BLACK
+        self.opponent = self.human_stone
+        self.human_turn_controller = human_turn_controller
+        self.interaction_controller = interaction_controller or NullRobotInteraction()
         self.board = Board()
         self.move_count = 0
 
@@ -53,10 +102,20 @@ class GameOrchestrator:
         cls,
         state_extractor: StateExtractor,
         config: dict[str, Any],
+        *,
+        config_base_dir: str | Path = PROJECT_ROOT,
+        robot_mover: RobotPoseMover | None = None,
+        human_turn_controller: HumanTurnController | None = None,
+        interaction_controller: RobotInteractionController | None = None,
     ) -> "GameOrchestrator":
         """Create an orchestrator from config, including saved robot calibration."""
         robot_cfg = config.get("robot", {})
-        pose_mapper = load_pose_mapper_from_config(config)
+        game_cfg = config.get("game", {})
+        if board_frame_required(config):
+            load_board_frame_calibration(config, required=True)
+
+        configure_ai_from_config(config, base_dir=config_base_dir)
+        pose_mapper = load_pose_mapper_from_config(config, base_dir=config_base_dir)
 
         if pose_mapper is not None:
             calib = None
@@ -79,7 +138,23 @@ class GameOrchestrator:
             calib=calib,
             z_height=get_robot_z_height(config),
             pose_mapper=pose_mapper,
-            my_stone=_parse_stone(config.get("game", {}).get("my_stone", "black")),
+            robot_mover=robot_mover,
+            suction_controller=create_suction_controller_from_config(config),
+            pickup_pose=_parse_optional_robot_pose(
+                robot_cfg.get("pickup_pose"),
+                "robot.pickup_pose",
+            ),
+            pickup_poses=_parse_pickup_poses(robot_cfg.get("pickup_poses")),
+            waiting_pose=_parse_optional_robot_pose(
+                robot_cfg.get("waiting_pose", "waiting"),
+                "robot.waiting_pose",
+            ),
+            play_area=parse_play_area_config(
+                game_cfg.get("play_area", game_cfg.get("active_area"))
+            ),
+            human_turn_controller=human_turn_controller,
+            interaction_controller=interaction_controller,
+            my_stone=_parse_robot_stone_from_game_config(game_cfg),
         )
 
     def calibrate_robot_before_game(
@@ -122,30 +197,115 @@ class GameOrchestrator:
                 hold_after=hold_after,
             )
 
+        self.move_to_waiting_pose()
         self.extractor.reset()
         ai_reset()
         self.board = self.get_board_state()
-        self.move_count = 0
+        self.move_count = sum(_stone_counts(self.board.state))
         return self.board
+
+    @property
+    def robot_moves_first(self) -> bool:
+        """Return whether the robot is black and therefore plays first."""
+
+        return self.robot_stone == BLACK
+
+    @property
+    def human_moves_first(self) -> bool:
+        """Return whether the human is black and therefore plays first."""
+
+        return self.human_stone == BLACK
+
+    def next_turn_stone(self) -> int:
+        """Return the stone color that should move next under normal Gomoku order."""
+
+        black_count, white_count = _stone_counts(self.board.state)
+        if black_count == white_count:
+            return BLACK
+        if black_count == white_count + 1:
+            return WHITE
+        raise RuntimeError(
+            "Illegal board turn balance: "
+            f"black={black_count}, white={white_count}. Check perception before continuing."
+        )
+
+    def is_robot_turn(self) -> bool:
+        """Return whether the next legal move belongs to the robot."""
+
+        return self.next_turn_stone() == self.robot_stone
+
+    def is_human_turn(self) -> bool:
+        """Return whether the next legal move belongs to the human."""
+
+        return self.next_turn_stone() == self.human_stone
+
+    def play_robot_turn(self) -> tuple[int, int, RobotPose]:
+        """Ask AI for the next move and execute the robot placement sequence."""
+
+        if not self.is_robot_turn():
+            raise RuntimeError(
+                f"Robot plays {stone_name(self.robot_stone)}, but next turn is "
+                f"{stone_name(self.next_turn_stone())}"
+            )
+        local_row, local_col = ai_decide(self.play_area.crop(self.board.state), self.robot_stone)
+        row, col = self.play_area.to_global(local_row, local_col)
+        target = self.execute_my_move(row, col)
+        return row, col, target
 
     def get_board_state(self) -> Board:
         """拍照并获取当前棋盘状态。"""
         board_matrix, _ = self.extractor.extract()
+        board_matrix = self.play_area.filter_board_state(board_matrix)
         return Board(board_matrix)
 
-    def wait_for_opponent(self) -> Board | None:
+    def sync_board_state(self) -> Board:
+        """Capture the current physical board and adopt it as game state."""
+
+        self.move_to_waiting_pose()
+        self.board = self.get_board_state()
+        self.move_count = sum(_stone_counts(self.board.state))
+        return self.board
+
+    def is_play_area_full(self) -> bool:
+        """Return whether the configured playable window has no empty positions."""
+
+        return self.play_area.is_full(self.board.state)
+
+    def wait_for_opponent(
+        self,
+        *,
+        confirm_human: bool = True,
+        max_attempts: int = 30,
+        poll_interval_seconds: float = 1.0,
+    ) -> Board | None:
         """等待对方落子，返回更新后的 Board；超时或错误返回 None。"""
-        # 简化版：拍照两次，对比差异找到新棋子
         import time
 
-        max_attempts = 30
+        self.move_to_waiting_pose()
+        if self.human_turn_controller is not None and confirm_human:
+            result = self.human_turn_controller.wait_for_move_done(
+                expected_stone=self.human_stone,
+                board_state=self.board.state.copy(),
+            )
+            if result.command == HumanTurnCommand.QUIT:
+                return None
+
         for _ in range(max_attempts):
-            time.sleep(1.0)
+            time.sleep(poll_interval_seconds)
             try:
                 new_matrix, delta = self.extractor.extract()
                 if delta is not None:
                     r, c, stone = delta
-                    if r is not None and c is not None and stone == self.opponent:
+                    if r is None or c is None:
+                        continue
+                    if not self.play_area.contains(r, c):
+                        logger.warning(
+                            "Detected human move outside play area at (%d, %d); ignoring",
+                            r,
+                            c,
+                        )
+                        continue
+                    if stone == self.human_stone:
                         self.board.place(r, c, stone)
                         return self.board
             except Exception as e:
@@ -162,8 +322,24 @@ class GameOrchestrator:
         if self.robot_mover is not None:
             if not isinstance(target, Mapping):
                 raise TypeError("robot_mover integration requires a mapping robot target")
-            self.robot_mover.move_to(target)
-            # TODO: 触发末端落子机构 / gripper sequence
+            stone_picked = False
+            try:
+                pickup_pose = self._pickup_pose_for_robot_stone()
+                if pickup_pose is not None:
+                    self.robot_mover.move_to(pickup_pose)
+                if self.suction_controller is not None:
+                    self.suction_controller.pick_stone()
+                    stone_picked = True
+                self.move_to_waiting_pose()
+                self.robot_mover.move_to(target)
+                if self.suction_controller is not None:
+                    self.suction_controller.drop_stone()
+                    stone_picked = False
+                self.move_to_waiting_pose()
+            except Exception:
+                if self.suction_controller is not None and stone_picked:
+                    self.suction_controller.off()
+                raise
         self.board.place(row, col, self.my_stone)
         self.move_count += 1
         return target
@@ -181,18 +357,65 @@ class GameOrchestrator:
         if winner != EMPTY:
             return winner
 
-        row, col = ai_decide(self.board.state, self.my_stone)
+        if not self.is_robot_turn():
+            logger.info(
+                "Skip AI move: robot plays %s, next turn is %s",
+                stone_name(self.robot_stone),
+                stone_name(self.next_turn_stone()),
+            )
+            return EMPTY
+
+        local_row, local_col = ai_decide(self.play_area.crop(self.board.state), self.robot_stone)
+        row, col = self.play_area.to_global(local_row, local_col)
         target = self._target_for_cell(row, col)
         logger.info(f"AI decides: ({row}, {col}), robot target: {target}")
 
-        self.board.place(row, col, self.my_stone)
+        self.board.place(row, col, self.robot_stone)
         self.move_count += 1
         winner = check_win(self.board.state, (row, col))
         return winner
 
+    def robot_say(self, text: str) -> None:
+        """Reserved HRI hook for robot speech."""
+
+        self.interaction_controller.speak(text)
+
+    def robot_dance(self, name: str = "default") -> None:
+        """Reserved HRI hook for robot dance or motion routines."""
+
+        self.interaction_controller.dance(name)
+
+    def robot_use_skill_gomoku(self, context: Mapping[str, Any] | None = None) -> None:
+        """Reserved HRI hook for invoking an external skill-gomoku action."""
+
+        self.interaction_controller.use_skill_gomoku(context)
+
+    def move_to_waiting_pose(self) -> RobotPose | None:
+        """Move the robot to the configured camera-clear waiting pose."""
+
+        if self.robot_mover is None or self.waiting_pose is None:
+            return None
+        return self.robot_mover.move_to(self.waiting_pose)
+
+    def _pickup_pose_for_robot_stone(self) -> dict[str, float] | None:
+        """Return the pickup pose for the robot's configured stone colour."""
+
+        return self.pickup_poses.get(self.robot_stone, self.pickup_pose)
+
     def _target_for_cell(self, row: int, col: int) -> RobotPose:
+        if not self.play_area.contains(row, col):
+            raise ValueError(
+                f"Robot target ({row}, {col}) is outside play area "
+                f"{self.play_area.describe(include_board=False)}"
+            )
         if self.pose_mapper is not None:
-            return self.pose_mapper.target_for_cell(row, col)
+            if (
+                self.pose_mapper.board_rows == self.board.rows
+                and self.pose_mapper.board_cols == self.board.cols
+            ):
+                return self.pose_mapper.target_for_cell(row, col)
+            local_row, local_col = self.play_area.to_local(row, col)
+            return self.pose_mapper.target_for_cell(local_row, local_col)
 
         if self.calib is None:
             raise RuntimeError(
@@ -214,3 +437,65 @@ def _parse_stone(value: Any) -> int:
     if value in (BLACK, WHITE):
         return int(value)
     raise ValueError(f"Unknown stone value: {value!r}")
+
+
+def _parse_robot_stone_from_game_config(game_cfg: Mapping[str, Any]) -> int:
+    robot_value = game_cfg.get("robot_stone", game_cfg.get("my_stone", "black"))
+    robot_stone = _parse_stone(robot_value)
+    if "robot_stone" in game_cfg and "my_stone" in game_cfg:
+        legacy_stone = _parse_stone(game_cfg["my_stone"])
+        if legacy_stone != robot_stone:
+            raise ValueError("game.robot_stone and legacy game.my_stone disagree")
+    return robot_stone
+
+
+def _parse_optional_robot_pose(value: Any, field_name: str) -> dict[str, float] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _pose_from_preset(value, field_name)
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{field_name} must be a preset name or mapping of LeRobot action keys")
+    if "preset" in value:
+        return _pose_from_preset(str(value["preset"]), field_name)
+    if not value:
+        raise ValueError(f"{field_name} cannot be empty when configured")
+    return {str(key): float(item) for key, item in value.items()}
+
+
+def _parse_pickup_poses(value: Any) -> dict[int, dict[str, float]] | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise ValueError("robot.pickup_poses must be a mapping with black/white keys")
+
+    parsed: dict[int, dict[str, float]] = {}
+    for stone_key, pose_value in value.items():
+        if pose_value is None:
+            continue
+        stone = _parse_stone(stone_key)
+        pose = _parse_optional_robot_pose(
+            pose_value,
+            f"robot.pickup_poses.{stone_key}",
+        )
+        if pose is None:
+            continue
+        parsed[stone] = pose
+    return parsed or None
+
+
+def _pose_from_preset(name: str, field_name: str) -> dict[str, float]:
+    try:
+        pose = PRESET_ACTIONS[name]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown {field_name} preset {name!r}; available presets: {sorted(PRESET_ACTIONS)}"
+        ) from exc
+    return dict(pose)
+
+
+def _stone_counts(board_matrix: np.ndarray) -> tuple[int, int]:
+    return (
+        int(np.count_nonzero(board_matrix == BLACK)),
+        int(np.count_nonzero(board_matrix == WHITE)),
+    )

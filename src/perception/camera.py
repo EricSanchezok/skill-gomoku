@@ -136,7 +136,7 @@ class WebCamera:
             self._capture.release()
             logger.info("WebCamera released: index=%d", self._device_index)
 
-    def __enter__(self) -> "WebCamera":
+    def __enter__(self) -> WebCamera:
         return self
 
     def __exit__(
@@ -206,7 +206,7 @@ class MockCamera:
         """No-op; mock camera has no hardware resources to release."""
         logger.info("MockCamera released.")
 
-    def __enter__(self) -> "MockCamera":
+    def __enter__(self) -> MockCamera:
         return self
 
     def __exit__(

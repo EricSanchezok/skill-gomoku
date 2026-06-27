@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
 airpump4pi.py
 
@@ -21,9 +20,7 @@ from __future__ import annotations
 
 import argparse
 import signal
-import sys
 from time import sleep
-from typing import Optional
 
 try:
     from gpiozero import Servo
@@ -45,15 +42,13 @@ class AirPump4Pi:
             valve closed, pump off
 
         start_suction / 开始吸:
-            valve closed, pump on
+            valve open, pump on
 
         hold / 吸住:
-            valve closed, pump on by default
-            You can set keep_pump=False if your vacuum system can hold suction
-            without continuously running the pump.
+            valve open, pump on
 
         release / 松口:
-            pump off, valve open for a short time, then everything off
+            valve closed first so the stone drops, then pump off to reduce noise
     """
 
     # Arduino Servo default-ish parameters
@@ -148,55 +143,50 @@ class AirPump4Pi:
     # High-level actions
     # -------------------------
 
-    def start_suction(self, duration: Optional[float] = None) -> None:
+    def start_suction(self, duration: float | None = None) -> None:
         """
         开始吸:
-            valve closed, pump on.
+            valve open, pump on.
 
         If duration is given, keep this state for `duration` seconds.
         """
-        self._log("开始吸：电磁阀关闭，气泵开启")
-        self.valve_close()
+        self._log("开始吸：电磁阀开启，气泵开启")
+        self.valve_open()
         self.pump_on()
 
         if duration is not None:
             sleep(duration)
 
-    def hold(self, *, keep_pump: bool = True, duration: Optional[float] = None) -> None:
+    def hold(self, *, keep_pump: bool = True, duration: float | None = None) -> None:
         """
         吸住:
-            valve closed.
+            valve open, pump on.
 
-        By default, keep pump running for stronger and safer holding.
-        If your suction cup can maintain vacuum after pumping, use keep_pump=False.
+        Real-machine validation shows this suction module must keep both the valve
+        and pump on to hold a stone. keep_pump is kept only for old call sites.
         """
-        if keep_pump:
-            self._log("吸住：电磁阀关闭，气泵保持开启")
-            self.valve_close()
-            self.pump_on()
-        else:
-            self._log("吸住：电磁阀关闭，气泵关闭，仅靠负压保持")
-            self.valve_close()
-            self.pump_off()
+        if not keep_pump:
+            self._log("吸住：真机验证需要保持气泵开启，忽略 keep_pump=False")
+
+        self._log("吸住：电磁阀保持开启，气泵保持开启")
+        self.valve_open()
+        self.pump_on()
 
         if duration is not None:
             sleep(duration)
 
-    def release(self, duration: float = 0.8, *, final_off: bool = True) -> None:
+    def release(self, duration: float = 0.05, *, final_off: bool = True) -> None:
         """
         松口:
-            pump off, valve open for `duration` seconds.
+            close valve so the stone drops, wait `duration` seconds, then pump off.
 
-        By default, after releasing, return to off state:
+        final_off is kept for compatibility. This action always ends with:
             valve closed, pump off.
         """
-        self._log(f"松口：气泵关闭，电磁阀开启 {duration:.2f} 秒")
-        self.pump_off()
-        self.valve_open()
+        self._log(f"松口：电磁阀关闭落子，{duration:.2f} 秒后关闭气泵")
+        self.valve_close()
         sleep(duration)
-
-        if final_off:
-            self.off()
+        self.pump_off()
 
     def off(self) -> None:
         """
@@ -216,7 +206,7 @@ class AirPump4Pi:
         suck_time: float = 1.0,
         *,
         keep_pump: bool = True,
-        hold_time: Optional[float] = None,
+        hold_time: float | None = None,
     ) -> None:
         """
         First build vacuum, then hold.
@@ -230,7 +220,7 @@ class AirPump4Pi:
     def suck_and_release(
         self,
         suck_time: float = 1.0,
-        release_time: float = 0.8,
+        release_time: float = 0.05,
         *,
         count: int = 1,
         interval: float = 0.2,
@@ -238,7 +228,7 @@ class AirPump4Pi:
         """
         Reproduce the original Arduino loop:
             suction for suck_time
-            release for release_time
+            close valve to release, then turn pump off after release_time
             off
             repeat count times
         """
@@ -254,16 +244,16 @@ class AirPump4Pi:
     # Chinese aliases
     # -------------------------
 
-    def 开始吸(self, duration: Optional[float] = None) -> None:
+    def 开始吸(self, duration: float | None = None) -> None:  # noqa: N802
         self.start_suction(duration=duration)
 
-    def 吸住(self, *, keep_pump: bool = True, duration: Optional[float] = None) -> None:
+    def 吸住(self, *, keep_pump: bool = True, duration: float | None = None) -> None:  # noqa: N802
         self.hold(keep_pump=keep_pump, duration=duration)
 
-    def 松口(self, duration: float = 0.8, *, final_off: bool = True) -> None:
+    def 松口(self, duration: float = 0.05, *, final_off: bool = True) -> None:  # noqa: N802
         self.release(duration=duration, final_off=final_off)
 
-    def 关闭(self) -> None:
+    def 关闭(self) -> None:  # noqa: N802
         self.off()
 
     # -------------------------
@@ -287,7 +277,7 @@ class AirPump4Pi:
         self.pump.close()
         self._log("GPIO resources released")
 
-    def __enter__(self) -> "AirPump4Pi":
+    def __enter__(self) -> AirPump4Pi:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -302,12 +292,12 @@ def wait_forever() -> None:
 def run_shell(air: AirPump4Pi) -> None:
     print(
         "\nInteractive commands:\n"
-        "  start / suck / 开始吸        开始吸，气泵开启\n"
+        "  start / suck / 开始吸        开始吸：电磁阀开启，气泵开启\n"
         "  hold / 吸住                 吸住，默认气泵保持开启\n"
-        "  hold-off                    吸住，但关闭气泵，仅靠负压保持\n"
-        "  release / 松口              松口，电磁阀开启 0.8 秒后关闭\n"
+        "  hold-off                    兼容旧命令：真机保持仍会开泵\n"
+        "  release / 松口              松口：关闭电磁阀落子，然后关闭气泵\n"
         "  off / close / 关闭          全部关闭\n"
-        "  cycle                       吸 1.0 秒，松口 0.8 秒\n"
+        "  cycle                       吸 1.0 秒，松口后快速关泵\n"
         "  q / quit / exit             退出\n"
     )
 
@@ -326,11 +316,11 @@ def run_shell(air: AirPump4Pi) -> None:
         elif cmd in {"hold-off", "hold_off"}:
             air.hold(keep_pump=False)
         elif cmd in {"release", "松口"}:
-            air.release(duration=0.8)
+            air.release(duration=0.05)
         elif cmd in {"off", "close", "关闭"}:
             air.off()
         elif cmd == "cycle":
-            air.suck_and_release(suck_time=1.0, release_time=0.8, count=1)
+            air.suck_and_release(suck_time=1.0, release_time=0.05, count=1)
         elif not cmd:
             continue
         else:
@@ -366,18 +356,23 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Duration in seconds. For start/hold, if omitted, keep running until Ctrl+C. "
-            "For release, default is 0.8s."
+            "For release, default is 0.05s."
         ),
     )
 
     parser.add_argument("--suck-time", type=float, default=1.0, help="Suction time for cycle/demo.")
-    parser.add_argument("--release-time", type=float, default=0.8, help="Release time for cycle/demo.")
+    parser.add_argument(
+        "--release-time",
+        type=float,
+        default=0.05,
+        help="Delay after closing the valve before turning the pump off.",
+    )
     parser.add_argument("--count", type=int, default=1, help="Repeat count for cycle/demo.")
 
     parser.add_argument(
         "--no-keep-pump",
         action="store_true",
-        help="For hold: close valve and turn pump off, relying on vacuum to hold.",
+        help="Deprecated compatibility flag. Real-machine hold still keeps pump on.",
     )
 
     parser.add_argument(
@@ -428,7 +423,7 @@ def main() -> int:
 
             elif args.command == "release":
                 air.release(
-                    duration=0.8 if args.time is None else args.time,
+                    duration=0.05 if args.time is None else args.time,
                     final_off=True,
                 )
 

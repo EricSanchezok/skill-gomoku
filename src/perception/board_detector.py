@@ -17,6 +17,10 @@ from dataclasses import dataclass, field
 import cv2
 import numpy as np
 
+from src.perception.board_calibration import (
+    board_frame_required,
+    load_board_frame_calibration,
+)
 from src.utils.constants import (
     BOARD_COLS,
     BOARD_ROWS,
@@ -63,24 +67,20 @@ class BoardDetector:
             config: 完整配置字典。读取 ``board.calibration`` 和
                 ``board_detection`` 段。
         """
-        board_cfg: dict = (config or {}).get("board", {})
         det_cfg: dict = (config or {}).get("board_detection", {})
+
+        default_method = "manual" if board_frame_required(config or {}) else "auto"
+        self._method: str = det_cfg.get("method", default_method)
 
         # ---- 加载预标定角点 ----
         self._calib_corners: np.ndarray | None = None
-        calib = board_cfg.get("calibration", {})
-        if calib.get("method") == "manual":
-            cr = calib.get("corners", {})
-            keys = ("top_left", "top_right", "bottom_right", "bottom_left")
-            if all(k in cr for k in keys):
-                self._calib_corners = np.array([cr[k] for k in keys], dtype=np.float32).reshape(
-                    4, 2
-                )
-                logger.info("使用手动标定角点模式，跳过棋盘检测")
-
-        self._method: str = det_cfg.get(
-            "method", "manual" if self._calib_corners is not None else "auto"
+        frame_calibration = load_board_frame_calibration(
+            config or {},
+            required=self._method == "manual",
         )
+        if frame_calibration is not None:
+            self._calib_corners = frame_calibration.as_array()
+            logger.info("使用手动标定角点模式，跳过棋盘检测")
 
         # Auto-mode 参数
         self._canny_low: float = float(det_cfg.get("canny_low", self._CANNY_LOW))
@@ -119,10 +119,11 @@ class BoardDetector:
 
         h_lines, v_lines = self._detect_grid_lines(warped)
 
-        grid_cell_size = float(dst) / float(BOARD_ROWS)
-        if len(h_lines) >= BOARD_ROWS + 1 and len(v_lines) >= BOARD_COLS + 1:
+        grid_cell_size = float(dst - 1) / float(BOARD_ROWS - 1)
+        if len(h_lines) >= BOARD_ROWS and len(v_lines) >= BOARD_COLS:
             grid_cell_size = (
-                (h_lines[-1] - h_lines[0]) / BOARD_ROWS + (v_lines[-1] - v_lines[0]) / BOARD_COLS
+                (h_lines[-1] - h_lines[0]) / (BOARD_ROWS - 1)
+                + (v_lines[-1] - v_lines[0]) / (BOARD_COLS - 1)
             ) / 2.0
 
         cells = self._compute_grid_cells(h_lines, v_lines, dst)
@@ -228,8 +229,11 @@ class BoardDetector:
         if bounds is None:
             return None
 
-        l, t, r, b = bounds
-        return np.array([[l, t], [r, t], [r, b], [l, b]], dtype=np.float32)
+        left, top, right, bottom = bounds
+        return np.array(
+            [[left, top], [right, top], [right, bottom], [left, bottom]],
+            dtype=np.float32,
+        )
 
     @staticmethod
     def _find_grid_cluster(h_mids, v_mids):
@@ -271,8 +275,8 @@ class BoardDetector:
             [[0, 0], [dst_size - 1, 0], [dst_size - 1, dst_size - 1], [0, dst_size - 1]],
             dtype=np.float32,
         )
-        M = cv2.getPerspectiveTransform(corners, dst_c)
-        return M, cv2.warpPerspective(image, M, (dst_size, dst_size))
+        transform = cv2.getPerspectiveTransform(corners, dst_c)
+        return transform, cv2.warpPerspective(image, transform, (dst_size, dst_size))
 
     # ---- Internal: grid lines on warped image ------------------------------
 
@@ -300,9 +304,7 @@ class BoardDetector:
             elif 80 < angle < 100:
                 v_mids.append(int((x1 + x2) / 2))
 
-        return self._cluster_lines(h_mids, BOARD_ROWS + 1), self._cluster_lines(
-            v_mids, BOARD_COLS + 1
-        )
+        return self._cluster_lines(h_mids, BOARD_ROWS), self._cluster_lines(v_mids, BOARD_COLS)
 
     @staticmethod
     def _cluster_lines(midpoints, expected):
@@ -321,20 +323,52 @@ class BoardDetector:
                 r.append(int(np.median(b)))
         return r
 
-    # ---- Internal: grid cells ----------------------------------------------
+    # ---- Internal: board-position hit boxes --------------------------------
 
     def _compute_grid_cells(self, h_lines, v_lines, dst_size):
         cells = []
-        if len(h_lines) >= BOARD_ROWS + 1 and len(v_lines) >= BOARD_COLS + 1:
-            hp = h_lines[: BOARD_ROWS + 1]
-            vp = v_lines[: BOARD_COLS + 1]
+        if len(h_lines) >= BOARD_ROWS and len(v_lines) >= BOARD_COLS:
+            hp = h_lines[:BOARD_ROWS]
+            vp = v_lines[:BOARD_COLS]
         else:
-            step = float(dst_size) / BOARD_ROWS
-            hp = [int(round(i * step)) for i in range(BOARD_ROWS + 1)]
-            vp = [int(round(i * step)) for i in range(BOARD_COLS + 1)]
+            row_step = float(dst_size - 1) / float(BOARD_ROWS - 1)
+            col_step = float(dst_size - 1) / float(BOARD_COLS - 1)
+            hp = [int(round(i * row_step)) for i in range(BOARD_ROWS)]
+            vp = [int(round(i * col_step)) for i in range(BOARD_COLS)]
+
+        h_bounds = _position_bounds(hp)
+        v_bounds = _position_bounds(vp)
         for r in range(BOARD_ROWS):
             row = []
             for c in range(BOARD_COLS):
-                row.append((vp[c], hp[r], vp[c + 1] - vp[c], hp[r + 1] - hp[r]))
+                left, right = v_bounds[c]
+                top, bottom = h_bounds[r]
+                row.append((left, top, right - left, bottom - top))
             cells.append(row)
         return cells
+
+
+def _position_bounds(lines: list[int]) -> list[tuple[int, int]]:
+    """Return hit-box bounds centered on Gomoku intersection lines.
+
+    A 15-line Gomoku board has 14 square intervals.  The playable positions are
+    intersections, not square centers, so each hit box is centered on one line
+    and extends halfway to neighboring lines.
+    """
+
+    bounds = []
+    for idx, center in enumerate(lines):
+        if idx == 0:
+            half_left = (lines[1] - center) / 2.0
+        else:
+            half_left = (center - lines[idx - 1]) / 2.0
+
+        if idx == len(lines) - 1:
+            half_right = (center - lines[idx - 1]) / 2.0
+        else:
+            half_right = (lines[idx + 1] - center) / 2.0
+
+        left = int(round(center - half_left))
+        right = int(round(center + half_right))
+        bounds.append((left, right))
+    return bounds

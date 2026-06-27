@@ -1,7 +1,8 @@
 """Grid mapper — bridge between warped image pixel coordinates and board (row, col).
 
-Maps the 15×15 grid cell boundaries from :class:`BoardDetector` to discrete
-board positions, and optionally to physical robot coordinates via calibration.
+Maps the 15×15 Gomoku intersection hit boxes from :class:`BoardDetector` to
+discrete board positions, and optionally to physical robot coordinates via
+calibration.
 
 Coordinate systems:
     - **Pixel**: (x, y) in the warped square image (default 600×600).
@@ -47,9 +48,10 @@ class CellPosition:
 class GridMapper:
     """Map between warped‑image pixel coordinates and board (row, col).
 
-    Consumes the cell rectangles produced by :meth:`BoardDetector.get_grid_cells`
-    and exposes conversions in both directions.  Once robot calibration points
-    are supplied, every cell also carries its physical workspace coordinate.
+    Consumes the intersection hit boxes produced by
+    :meth:`BoardDetector.get_grid_cells` and exposes conversions in both
+    directions. Once robot calibration points are supplied, every board
+    position also carries its physical workspace coordinate.
 
     Usage::
 
@@ -74,9 +76,9 @@ class GridMapper:
         self._board_rows: int = board_rows
         self._board_cols: int = board_cols
 
-        # cell rects: _cells[row][col] = (x, y, w, h) in warped image px
+        # intersection hit boxes: _cells[row][col] = (x, y, w, h) in warped image px
         self._cells: list[list[tuple[int, int, int, int]]] = []
-        # cell centres: _centers[row][col] = (cx, cy) in warped image px
+        # intersection centers: _centers[row][col] = (cx, cy) in warped image px
         self._centers: list[list[tuple[float, float]]] = []
         # position grid: _positions[row][col] = CellPosition
         self._positions: list[list[CellPosition]] = []
@@ -89,14 +91,14 @@ class GridMapper:
     # ------------------------------------------------------------------
 
     def load_cells(self, cells: list[list[tuple[int, int, int, int]]]) -> None:
-        """Load cell boundaries from :meth:`BoardDetector.get_grid_cells`.
+        """Load intersection hit boxes from :meth:`BoardDetector.get_grid_cells`.
 
-        Computes the pixel‑space center of every cell and populates the
+        Computes the pixel-space center of every board position and populates the
         internal position grid (robot coordinates remain ``None``).
 
         Args:
             cells: A ``cells[row][col] = (x, y, w, h)`` structure as returned
-                   by the detector.  Must be ``board_rows × board_cols``.
+                   by the detector. Must be ``board_rows x board_cols``.
         """
         self._cells = cells
 
@@ -117,7 +119,11 @@ class GridMapper:
 
         self._is_loaded = True
         self._is_calibrated = False
-        logger.info("Loaded cells for %d×%d grid", self._board_rows, self._board_cols)
+        logger.info(
+            "Loaded intersection hit boxes for %dx%d board",
+            self._board_rows,
+            self._board_cols,
+        )
 
     # ------------------------------------------------------------------
     # coordinate conversions
@@ -126,9 +132,9 @@ class GridMapper:
     def pixel_to_grid(self, px: float, py: float) -> tuple[int, int]:
         """Convert a warped‑image pixel position to the nearest (row, col).
 
-        Performs a nearest‑cell lookup: if the point falls inside a cell's
-        bounding rectangle, that cell is returned.  If the point lies outside
-        the board, the closest edge cell is returned instead.
+        Performs a nearest-position lookup: if the point falls inside an
+        intersection hit box, that board position is returned. If the point
+        lies outside the board, the closest edge position is returned instead.
 
         Args:
             px: X coordinate in the warped image.
@@ -150,7 +156,7 @@ class GridMapper:
                 if x <= px <= x + w and y <= py <= y + h:
                     return (row, col)
 
-        # 2) Point outside all cells — nearest cell by Euclidean distance to centre
+        # 2) Point outside all boxes — nearest intersection by Euclidean distance
         best_row, best_col = 0, 0
         best_dist2 = float("inf")
         for row in range(self._board_rows):
@@ -171,7 +177,7 @@ class GridMapper:
         return (best_row, best_col)
 
     def grid_to_pixel(self, row: int, col: int) -> tuple[float, float]:
-        """Get the pixel centre of board cell ``(row, col)``.
+        """Get the pixel center of board intersection ``(row, col)``.
 
         Args:
             row: 0‑based row index.
@@ -194,18 +200,18 @@ class GridMapper:
         return self._centers[row][col]
 
     # ------------------------------------------------------------------
-    # cell / positions access
+    # board-position access
     # ------------------------------------------------------------------
 
     def get_cell(self, row: int, col: int) -> CellPosition:
-        """Return the :class:`CellPosition` for a specific cell.
+        """Return the :class:`CellPosition` for a specific board position.
 
         Args:
             row: 0‑based row index.
             col: 0‑based column index.
 
         Returns:
-            The cell's position data in all available coordinate systems.
+            The position data in all available coordinate systems.
 
         Raises:
             RuntimeError: If :meth:`load_cells` has not been called yet.
@@ -225,7 +231,7 @@ class GridMapper:
 
         Returns:
             A ``positions[row][col]`` 2‑D list.  Robot coordinates are
-            ``None`` on every cell until :meth:`calibrate_robot` is called.
+            ``None`` on every intersection until :meth:`calibrate_robot` is called.
 
         Raises:
             RuntimeError: If :meth:`load_cells` has not been called yet.
@@ -239,10 +245,10 @@ class GridMapper:
     # ------------------------------------------------------------------
 
     def calibrate_robot(self, calib: CalibrationPoints, z_height: float = 50.0) -> None:
-        """Set robot calibration and populate robot coordinates for every cell.
+        """Set robot calibration and populate robot coordinates for every position.
 
         Uses :func:`src.robot.controller.board_to_robot_coords` to compute the
-        physical ``(x, y, z)`` of each of the 225 cells via bilinear
+        physical ``(x, y, z)`` of each of the 225 intersections via bilinear
         interpolation between the four calibration corner points.
 
         Args:

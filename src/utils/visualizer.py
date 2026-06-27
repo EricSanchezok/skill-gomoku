@@ -2,7 +2,8 @@
 
 import cv2
 import numpy as np
-from src.utils.constants import BLACK, EMPTY, WHITE
+
+from src.utils.constants import BLACK, WHITE
 
 
 def draw_board_overlay(
@@ -15,7 +16,7 @@ def draw_board_overlay(
     Args:
         image: 透视矫正后的棋盘俯视图像 (BGR)。
         board_state: 15×15 状态矩阵，0=空 1=黑 2=白。
-        grid_size: 每个格子像素数，若为 None 则根据 image 尺寸推断。
+        grid_size: 落子点间距像素数，若为 None 则根据 image 尺寸推断。
 
     Returns:
         叠加了标记的图像。
@@ -24,12 +25,12 @@ def draw_board_overlay(
     rows, cols = board_state.shape
     h, w = out.shape[:2]
     if grid_size is None:
-        grid_size = max(w // cols, h // rows)
+        grid_size = max(1, int(round(max(w - 1, h - 1) / max(rows - 1, cols - 1))))
 
     for r in range(rows):
         for c in range(cols):
-            cx = int(c * grid_size + grid_size / 2)
-            cy = int(r * grid_size + grid_size / 2)
+            cx = int(round(c * grid_size))
+            cy = int(round(r * grid_size))
             if board_state[r, c] == BLACK:
                 cv2.circle(out, (cx, cy), grid_size // 4, (0, 0, 255), 2)
             elif board_state[r, c] == WHITE:
@@ -49,34 +50,33 @@ def draw_board_graphics(
 
     Args:
         board_state: 15×15 状态矩阵。
-        cell_size: 每个格子像素大小。
+        cell_size: 相邻落子点间距像素大小。
         last_move: 最近一步落子 (row, col)，会高亮显示。
 
     Returns:
         BGR 图像。
     """
     rows, cols = board_state.shape
-    margin = cell_size // 2
-    img_h = rows * cell_size + 2 * margin
-    img_w = cols * cell_size + 2 * margin
+    margin = cell_size
+    img_h = (rows - 1) * cell_size + 2 * margin
+    img_w = (cols - 1) * cell_size + 2 * margin
 
     # 棋盘底色
     canvas = np.full((img_h, img_w, 3), (60, 120, 180), dtype=np.uint8)
 
-    # 格子
+    # 15 条横线 / 15 条竖线；中间是 14 x 14 个物理方格。
     for r in range(rows):
-        for c in range(cols):
-            x1 = margin + c * cell_size
-            y1 = margin + r * cell_size
-            x2 = x1 + cell_size
-            y2 = y1 + cell_size
-            cv2.rectangle(canvas, (x1, y1), (x2, y2), (40, 80, 140), 1)
+        y = margin + r * cell_size
+        cv2.line(canvas, (margin, y), (margin + (cols - 1) * cell_size, y), (40, 80, 140), 1)
+    for c in range(cols):
+        x = margin + c * cell_size
+        cv2.line(canvas, (x, margin), (x, margin + (rows - 1) * cell_size), (40, 80, 140), 1)
 
     # 棋子
     for r in range(rows):
         for c in range(cols):
-            cx = margin + c * cell_size + cell_size // 2
-            cy = margin + r * cell_size + cell_size // 2
+            cx = margin + c * cell_size
+            cy = margin + r * cell_size
             radius = int(cell_size * 0.38)
             if board_state[r, c] == BLACK:
                 cv2.circle(canvas, (cx, cy), radius, (30, 30, 30), -1)
@@ -86,8 +86,8 @@ def draw_board_graphics(
     # 高亮最后落子
     if last_move is not None:
         r, c = last_move
-        cx = margin + c * cell_size + cell_size // 2
-        cy = margin + r * cell_size + cell_size // 2
+        cx = margin + c * cell_size
+        cy = margin + r * cell_size
         cv2.circle(canvas, (cx, cy), int(cell_size * 0.42), (0, 255, 255), 3)
 
     return canvas
