@@ -8,6 +8,7 @@ easing curve.
 
 from __future__ import annotations
 
+import logging
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ DEFAULT_ROBOT_ID = "so101_follower_0610"
 DEFAULT_MAX_RELATIVE_TARGET = 5.0
 DEFAULT_DURATION_SECONDS = 5.0
 DEFAULT_DT_SECONDS = 0.01
+LEROBOT_CLAMP_WARNING_PREFIX = "Relative goal position magnitude had to be clamped to be safe"
 
 WAITING_ACTION: Action = {
     "elbow_flex.pos": 9.714285714285714,
@@ -46,6 +48,47 @@ PRESET_ACTIONS: dict[str, Action] = {
     "waiting": WAITING_ACTION,
     "center": CENTER_ACTION,
 }
+
+
+class _ClampWarningFilter(logging.Filter):
+    _so101_clamp_warning_filter = True
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return LEROBOT_CLAMP_WARNING_PREFIX not in record.getMessage()
+
+
+def suppress_lerobot_clamp_warnings(enabled: bool = True) -> None:
+    """Hide LeRobot's repeated max-relative-target clamp warning from console logs."""
+    root_logger = logging.getLogger()
+    filters = list(root_logger.filters)
+    existing = [
+        item
+        for item in filters
+        if getattr(item, "_so101_clamp_warning_filter", False)
+    ]
+
+    if enabled:
+        if not existing:
+            root_logger.addFilter(_ClampWarningFilter())
+        for handler in root_logger.handlers:
+            if not any(
+                getattr(item, "_so101_clamp_warning_filter", False)
+                for item in handler.filters
+            ):
+                handler.addFilter(_ClampWarningFilter())
+        return
+
+    root_logger.filters = [
+        item
+        for item in root_logger.filters
+        if not getattr(item, "_so101_clamp_warning_filter", False)
+    ]
+    for handler in root_logger.handlers:
+        handler.filters = [
+            item
+            for item in handler.filters
+            if not getattr(item, "_so101_clamp_warning_filter", False)
+        ]
 
 
 def smoothstep(x: float) -> float:

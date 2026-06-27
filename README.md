@@ -237,6 +237,22 @@ python scripts/calibrate_robot_board.py --backend input
 target_action = orchestrator.execute_my_move(row, col)
 ```
 
+单独测试某个实测落点时，可以用：
+
+```bash
+# 默认按中心 9x9 pose map 的 1-based local 坐标移动：current -> waiting -> r5c5
+python scripts/move_to_board_position.py r5c5
+
+# 也可以输入 15x15 全局落子点坐标，脚本会通过 game.play_area 映射到 9x9 pose map
+python scripts/move_to_board_position.py 8,8 --space global
+
+# 只解析目标，不连接机械臂
+python scripts/move_to_board_position.py r5c5 --dry-run
+```
+
+这个脚本默认隐藏 LeRobot 的重复 clamp warning。如果需要检查 LeRobot 原始安全告警，
+加 `--show-clamp-warnings`。
+
 ### 接入吸棋气泵
 
 气泵控制已接入主流程，但默认关闭，避免在没有 Raspberry Pi GPIO 的开发机上误初始化硬件。
@@ -320,6 +336,9 @@ python scripts/run_live_game.py --engine-path bin/rapfi/linux-aarch64/rapfi
 
 # 已确认路径安全后，关闭每段机械臂移动前的确认
 python scripts/run_live_game.py --enable-air-pump --full-game --no-confirm-robot-moves
+
+# 调试 LeRobot max_relative_target clamp 时显示原始 warning
+python scripts/run_live_game.py --enable-air-pump --show-clamp-warnings
 ```
 
 ### 测试感知管线

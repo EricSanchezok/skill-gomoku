@@ -138,6 +138,27 @@ conda run -n lerobot python -m src.robot.tools.so101_move_demo center \
 conda run -n lerobot python -m src.robot.tools.so101_move_demo waiting
 ```
 
+测试某一个实测棋位时，用 `scripts/move_to_board_position.py`。默认输入的是中心
+9 x 9 pose map 的 1-based local 坐标，运动顺序固定为
+`current -> waiting_pose -> target`：
+
+```bash
+# 到 9x9 局部棋位 r5c5
+python scripts/move_to_board_position.py r5c5
+
+# 用 15x15 全局落子点坐标，经过 game.play_area 映射到 9x9 pose map
+python scripts/move_to_board_position.py 8,8 --space global
+
+# 连续交互测试多个点
+python scripts/move_to_board_position.py
+```
+
+这个脚本和 live run 默认都会隐藏 LeRobot 反复输出的
+`Relative goal position magnitude had to be clamped to be safe` warning。这个
+warning 表示 LeRobot 的 `max_relative_target` 安全限幅在生效；如果要诊断真实限幅
+情况，加 `--show-clamp-warnings`。如果运动明显变慢或跟不上，优先把
+`--duration` 调大，而不是直接把 `--max-relative-target` 调得很高。
+
 代码里可以这样用：
 
 ```python
@@ -170,7 +191,7 @@ python scripts/run_live_game.py
 ```
 
 真机默认是保守 bring-up 模式：最多跑 1 个 turn，并且每一次 SO101
-移动前都会打印目标 action 和最大关节变化，等待人工按 Enter。确认完整路径、
+移动前都会打印最大关节变化摘要，等待人工按 Enter。确认完整路径、
 棋盒位置和棋盘位置都安全后，才考虑加 `--full-game` 或 `--max-turns N`。如果要
 关闭逐步确认，必须显式加 `--no-confirm-robot-moves`。
 

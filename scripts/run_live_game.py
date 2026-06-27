@@ -28,6 +28,7 @@ from src.robot.so101_mover import (  # noqa: E402
     DEFAULT_ROBOT_ID,
     MotionProfile,
     SO101SmoothMover,
+    suppress_lerobot_clamp_warnings,
 )
 from src.utils.config_loader import load_config  # noqa: E402
 from src.utils.constants import BOARD_COLS, BOARD_ROWS, EMPTY  # noqa: E402
@@ -44,17 +45,22 @@ class ConfirmingRobotMover:
         self,
         delegate: SO101SmoothMover,
         *,
+        verbose_target: bool = False,
         input_fn=input,
         print_fn=print,
     ) -> None:
         self._delegate = delegate
+        self._verbose_target = verbose_target
         self._input = input_fn
         self._print = print_fn
 
     def move_to(self, target_pose: Mapping[str, float]) -> Any:
         target = {str(key): float(value) for key, value in target_pose.items()}
         self._print("\nNext SO101 move:")
-        self._print(_format_action(target))
+        if self._verbose_target:
+            self._print(_format_action(target))
+        else:
+            self._print(f"  target joints: {len(target)}")
         try:
             current = self._delegate.read_action(target)
             self._print(_format_action_delta(current, target))
@@ -75,6 +81,7 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s | %(name)s | %(message)s",
     )
+    suppress_lerobot_clamp_warnings(enabled=not args.show_clamp_warnings)
 
     config_path = _project_path(args.config)
     config = load_config(config_path)
@@ -98,7 +105,9 @@ def main() -> int:
             print("Holding current SO101 pose before starting...")
             mover.hold_current()
             robot_mover = (
-                ConfirmingRobotMover(mover) if args.confirm_robot_moves else mover
+                ConfirmingRobotMover(mover, verbose_target=args.verbose)
+                if args.confirm_robot_moves
+                else mover
             )
 
         orchestrator = GameOrchestrator.from_config(
@@ -231,6 +240,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--allow-missing-pickup-pose",
         action="store_true",
         help="Allow live robot motion when the configured robot stone has no pickup pose.",
+    )
+    parser.add_argument(
+        "--show-clamp-warnings",
+        action="store_true",
+        help="Show LeRobot max-relative-target clamp warnings.",
     )
     parser.add_argument("--yes", action="store_true", help="Skip final start confirmation")
     parser.add_argument("--release-on-exit", action="store_true")
