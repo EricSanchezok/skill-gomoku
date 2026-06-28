@@ -6,6 +6,7 @@ import pytest
 import src.game.ai as ai_module
 import src.game.llm_ai as llm_ai_module
 import src.orchestrator as orchestrator_module
+from src.game.board import Board
 from src.game.decision import AIDecision, AIMoveError
 from src.game.play_area import PlayArea, parse_play_area_config
 from src.interaction import (
@@ -113,6 +114,17 @@ def test_default_live_config_uses_openrouter() -> None:
 
     assert config["game"]["ai"]["provider"] == "openrouter"
     assert config["game"]["ai"]["openrouter"]["model"] == "deepseek/deepseek-v4-flash"
+
+
+def test_board_repr_shows_row_and_column_indexes() -> None:
+    board = Board()
+    board.place(6, 7, BLACK)
+
+    text = repr(board)
+
+    assert " 0  1  2  3  4  5  6  7" in text
+    assert " 6" in text
+    assert " B" in text
 
 
 def test_from_config_prefers_robot_stone_and_keeps_my_stone_compatibility() -> None:
@@ -469,6 +481,21 @@ def test_openrouter_decision_parses_one_based_legal_move() -> None:
     assert decision.use_skill is True
     assert decision.trash_talk == "你这棋盘归我了"
     assert decision.source == "openrouter"
+
+
+def test_openrouter_prompt_lists_occupied_coordinates() -> None:
+    board = np.zeros((9, 9), dtype=np.int8)
+    board[2, 2] = BLACK
+    board[2, 3] = BLACK
+    board[4, 4] = WHITE
+    board[4, 3] = WHITE
+
+    messages = llm_ai_module._messages(board, BLACK, "medium")
+    prompt = messages[1]["content"]
+
+    assert "black(2): (3, 3), (3, 4)" in prompt
+    assert "white(2): (5, 4), (5, 5)" in prompt
+    assert "禁止选择 black/white 列表里已经出现过的坐标" in prompt
 
 
 def test_openrouter_decision_rejects_occupied_move() -> None:

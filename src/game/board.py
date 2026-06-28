@@ -55,13 +55,10 @@ class Board:
         return not np.any(self._state == EMPTY)
 
     def __repr__(self) -> str:
-        rows = []
+        rows = ["    " + " ".join(f"{c:2d}" for c in range(BOARD_COLS))]
         for r in range(BOARD_ROWS):
-            line = " ".join(
-                "." if self._state[r, c] == EMPTY else "B" if self._state[r, c] == BLACK else "W"
-                for c in range(BOARD_COLS)
-            )
-            rows.append(f"{r:2d} {line}")
+            line = " ".join(f"{_stone_symbol(self._state[r, c]):>2}" for c in range(BOARD_COLS))
+            rows.append(f"{r:2d}  {line}")
         return "\n".join(rows)
 
 
@@ -109,3 +106,11 @@ def check_win(board: np.ndarray, last_move: tuple[int, int] | None = None) -> in
                 if count_line(r, c, dr, dc) >= 5:
                     return int(board[r, c])
     return EMPTY
+
+
+def _stone_symbol(stone: int) -> str:
+    if stone == EMPTY:
+        return "."
+    if stone == BLACK:
+        return "B"
+    return "W"

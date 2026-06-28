@@ -159,17 +159,23 @@ def _messages(board: np.ndarray, my_stone: int, strength: str) -> list[dict[str,
     my_name = _stone_name(my_stone)
     opponent_name = _stone_name(WHITE if my_stone == BLACK else BLACK)
     system = (
-        "你是一个五子棋机器人。你必须只在给出的中间可下棋区域里选择落子，"
-        "row 和 col 都使用 1-based 坐标。你不能选择已有棋子的位置。"
+        "你是一个五子棋机器人。你必须只在给出的 9x9 表格里选择落子，"
+        "row 和 col 都使用这张表的 1-based 坐标。不要使用外层 15x15 或 0-14 坐标。"
+        "你不能选择已有棋子的位置。"
         "返回严格 JSON，不要 Markdown，不要额外解释。"
     )
     user = "\n".join(
         [
             f"你执{my_name}，对手执{opponent_name}。",
             f"你的实力设定：{_strength_prompt(strength)}",
-            f"下面是视觉识别出来的 15x15 棋盘中间 {size}x{size} 可下棋区域。",
+            f"下面这张 {size}x{size} 表就是唯一可下棋区域。",
+            "row/col 只使用表格左侧和上方的 1-based 编号。",
             "符号：.=空，B=黑棋，W=白棋。",
             _board_text(board),
+            "已落子坐标，同样使用这张表的 1-based row,col：",
+            _stone_coordinate_line(board, BLACK),
+            _stone_coordinate_line(board, WHITE),
+            "禁止选择 black/white 列表里已经出现过的坐标。",
             "只能返回这个 JSON：",
             (
                 '{"should_play": true, "row": 1, "col": 1, '
@@ -197,9 +203,15 @@ def _parse_decision(content: str, board: np.ndarray) -> AIDecision:
     col = int(col_value) - 1
     rows, cols = board.shape
     if not (0 <= row < rows and 0 <= col < cols):
-        raise AIMoveError(f"OpenRouter LLM chose ({row + 1}, {col + 1}) outside {rows}x{cols}")
+        raise AIMoveError(
+            f"OpenRouter LLM chose play-area local 1-based "
+            f"({row + 1}, {col + 1}) outside {rows}x{cols}"
+        )
     if board[row, col] != EMPTY:
-        raise AIMoveError(f"OpenRouter LLM chose occupied cell ({row + 1}, {col + 1})")
+        raise AIMoveError(
+            "OpenRouter LLM chose occupied play-area local 1-based cell "
+            f"({row + 1}, {col + 1}); LLM board was:\n{_board_text(board)}"
+        )
     return AIDecision(
         row=row,
         col=col,
@@ -264,6 +276,15 @@ def _board_text(board: np.ndarray) -> str:
             cells.append("." if value == EMPTY else "B" if value == BLACK else "W")
         rows.append(f"{r + 1:2d}: " + " ".join(cells))
     return "\n".join(rows)
+
+
+def _stone_coordinate_line(board: np.ndarray, stone: int) -> str:
+    coords = [
+        f"({int(row) + 1}, {int(col) + 1})"
+        for row, col in zip(*np.where(board == stone), strict=True)
+    ]
+    name = "black" if stone == BLACK else "white"
+    return f"{name}({len(coords)}): {', '.join(coords) if coords else 'none'}"
 
 
 def _stone_name(stone: int) -> str:
