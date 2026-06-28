@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 from pathlib import Path
 
 import pytest
@@ -197,6 +198,47 @@ def test_lowlevel_pickup_recording_writes_black_and_white(monkeypatch, tmp_path)
     assert saved["robot"]["pickup_poses"]["black"]["shoulder_pan.pos"] == 1.0
     assert saved["robot"]["pickup_poses"]["white"]["gripper.pos"] == 4.0
     assert mover.events == ["release", "read", "read", "hold"]
+
+
+def test_corner_replay_routes_every_board_corner_through_waiting(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    live = _load_live_module()
+    pose_map_path = tmp_path / "poses.json"
+    pose_map_path.write_text(json.dumps(_measured_pose_data()), encoding="utf-8")
+    waiting = {"joint.pos": -1.0}
+    config = {
+        "robot": {
+            "pose_map": {"method": "measured", "path": str(pose_map_path)},
+            "waiting_pose": waiting,
+        }
+    }
+    events = []
+
+    class FakeMover:
+        def hold_current(self):
+            events.append(("hold",))
+
+        def move_to(self, pose):
+            events.append(("move", dict(pose)))
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    live._move_robot_to_board_corners(config, FakeMover())
+
+    assert events == [
+        ("hold",),
+        ("move", waiting),
+        ("move", {"joint.pos": 0.0}),
+        ("move", waiting),
+        ("move", {"joint.pos": 2.0}),
+        ("move", waiting),
+        ("move", {"joint.pos": 22.0}),
+        ("move", waiting),
+        ("move", {"joint.pos": 20.0}),
+        ("move", waiting),
+    ]
 
 
 def test_move_to_waiting_from_config_uses_waiting_preset() -> None:

@@ -371,15 +371,22 @@ def _move_robot_to_board_corners(
     mapper = load_pose_mapper_from_config(config, base_dir=PROJECT_ROOT)
     if mapper is None:
         raise ValueError("robot.pose_map.path is required for corner replay")
+    waiting = _waiting_pose_from_config(config)
+    if waiting is None:
+        raise ValueError("robot.waiting_pose is required before moving to board corners")
 
     print("Holding current pose before corner replay...")
     mover.hold_current()
     for corner_name, target in zip(mapper.corner_cells(), mapper.corner_targets(), strict=True):
         if not isinstance(target.pose, Mapping):
             raise TypeError("SO101 corner replay requires mapping poses")
+        print("Moving to waiting pose before board corner...")
+        mover.move_to(waiting)
         input(f"Press Enter to move to {corner_name} ({target.label})...")
         print(f"Moving to {corner_name}: {target.label}")
         mover.move_to(target.pose)
+    print("Returning to waiting pose after corner replay...")
+    mover.move_to(waiting)
     print("Corner replay complete.")
 
 
@@ -420,14 +427,18 @@ def _move_to_waiting_from_config(
 ) -> None:
     if mover is None:
         return
-    robot_cfg = config.get("robot", {})
-    if not isinstance(robot_cfg, Mapping):
-        return
-    pose = _pose_from_config_value(robot_cfg.get("waiting_pose", "waiting"))
+    pose = _waiting_pose_from_config(config)
     if pose is None:
         return
     print("Moving to waiting pose before camera calibration...")
     mover.move_to(pose)
+
+
+def _waiting_pose_from_config(config: Mapping[str, Any]) -> dict[str, float] | None:
+    robot_cfg = config.get("robot", {})
+    if not isinstance(robot_cfg, Mapping):
+        return None
+    return _pose_from_config_value(robot_cfg.get("waiting_pose", "waiting"))
 
 
 def _pose_from_config_value(value: Any) -> dict[str, float] | None:

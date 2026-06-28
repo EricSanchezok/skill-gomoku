@@ -22,6 +22,7 @@ from src.robot.so101_lowlevel_mover import (  # noqa: E402
     SO101LowLevelMover,
     make_lowlevel_profile,
 )
+from src.robot.so101_mover import PRESET_ACTIONS  # noqa: E402
 from src.utils.config_loader import load_config  # noqa: E402
 
 
@@ -49,6 +50,9 @@ def main() -> int:
     robot_cfg = config.get("robot", {})
     if not isinstance(robot_cfg, Mapping):
         robot_cfg = {}
+    waiting = _waiting_pose(robot_cfg.get("waiting_pose", "waiting"))
+    if waiting is None:
+        parser.error("robot.waiting_pose is required before moving to board corners")
 
     port = args.port or robot_cfg.get("port")
     robot_id = args.robot_id or robot_cfg.get("id", DEFAULT_ROBOT_ID)
@@ -74,16 +78,20 @@ def main() -> int:
             raise TypeError("SO101 corner replay requires mapping poses")
 
         print("Holding current pose before corner replay...")
-        mover.hold_current(first_pose)
+        mover.hold_current()
 
         for corner_name, target in zip(mapper.corner_cells(), targets, strict=True):
             pose = target.pose
             if not isinstance(pose, Mapping):
                 raise TypeError("SO101 corner replay requires mapping poses")
+            print("Moving to waiting pose before board corner...")
+            mover.move_to(waiting)
             if not args.yes:
                 input(f"Press Enter to move to {corner_name} ({target.label})...")
             print(f"Moving to {corner_name}: {target.label}")
             mover.move_to(pose)
+        print("Returning to waiting pose after corner replay...")
+        mover.move_to(waiting)
 
         if args.release_after:
             mover.release()
@@ -98,6 +106,18 @@ def main() -> int:
         return 130
     finally:
         mover.disconnect()
+
+
+def _waiting_pose(value) -> dict[str, float] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return dict(PRESET_ACTIONS[value])
+    if not isinstance(value, Mapping):
+        raise ValueError("robot.waiting_pose must be a preset name or mapping")
+    if "preset" in value:
+        return dict(PRESET_ACTIONS[str(value["preset"])])
+    return {str(key): float(item) for key, item in value.items()}
 
 
 if __name__ == "__main__":
