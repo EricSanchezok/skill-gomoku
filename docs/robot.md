@@ -231,10 +231,10 @@ python scripts/run_live_game.py --mock-camera --dry-run-robot --disable-air-pump
 python scripts/run_live_game.py --dry-run-robot --disable-air-pump
 
 # 3. 树莓派真机，默认只跑一手且每段移动都要人工确认
-python scripts/run_live_game.py --enable-air-pump --port /dev/ttyACM0
+python scripts/run_live_game.py --port /dev/ttyACM0
 
 # 4. 确认安全后再跑完整对局
-python scripts/run_live_game.py --enable-air-pump --full-game --port /dev/ttyACM0
+python scripts/run_live_game.py --full-game --port /dev/ttyACM0
 ```
 
 当前仓库里的 `so101_board_81_positions.json` 是中心 9 x 9 的 81 个落点，正好对应
@@ -278,7 +278,8 @@ orchestrator.robot_dance("win")
 orchestrator.robot_use_skill_gomoku({"phase": "midgame"})
 ```
 
-气泵吸棋也已经接入 `execute_my_move()`。启用方式：
+气泵吸棋也已经接入 `execute_my_move()`。`run_live_game.py` 默认启用气泵，
+只有显式加 `--disable-air-pump` 才会关闭。默认配置：
 
 ```yaml
 robot:

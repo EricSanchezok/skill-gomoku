@@ -83,7 +83,7 @@ robot:
       wrist_roll.pos: -0.3956043956043956
   waiting_pose: waiting
   air_pump:
-    enabled: false
+    enabled: true
     dry_run: false
     valve_pin: 20
     pump_pin: 21

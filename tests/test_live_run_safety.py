@@ -145,6 +145,26 @@ def test_live_run_defaults_to_one_turn_unless_full_game_is_requested() -> None:
     assert live._resolve_max_turns(_args(max_turns=4), orchestrator) == 4
 
 
+def test_live_run_enables_air_pump_by_default() -> None:
+    live = _load_live_module()
+    config = {"robot": {"air_pump": {"enabled": False}}, "game": {"ai": {}}}
+    args = live._build_parser().parse_args([])
+
+    live._apply_cli_overrides(config, args)
+
+    assert config["robot"]["air_pump"]["enabled"] is True
+
+
+def test_live_run_disable_air_pump_override_wins() -> None:
+    live = _load_live_module()
+    config = {"robot": {"air_pump": {"enabled": True}}, "game": {"ai": {}}}
+    args = live._build_parser().parse_args(["--enable-air-pump", "--disable-air-pump"])
+
+    live._apply_cli_overrides(config, args)
+
+    assert config["robot"]["air_pump"]["enabled"] is False
+
+
 def test_confirming_robot_mover_prompts_before_delegating() -> None:
     live = _load_live_module()
     events = []

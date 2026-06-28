@@ -254,8 +254,8 @@ python scripts/move_to_board_position.py r5c5 --dry-run
 
 ### 接入吸棋气泵
 
-气泵控制已接入主流程，但默认关闭，避免在没有 Raspberry Pi GPIO 的开发机上误初始化硬件。
-真机启用时在 `config/default.yaml` 里设置：
+气泵控制已接入主流程，`run_live_game.py` 默认启用气泵。开发机或纯 dry-run
+如果不想初始化 GPIO，需要显式加 `--disable-air-pump`。默认配置：
 
 ```yaml
 robot:
@@ -313,7 +313,6 @@ python scripts/run_live_game.py \
 
 ```bash
 python scripts/run_live_game.py \
-  --enable-air-pump \
   --port /dev/ttyACM0
 ```
 
@@ -322,7 +321,6 @@ python scripts/run_live_game.py \
 
 ```bash
 python scripts/run_live_game.py \
-  --enable-air-pump \
   --full-game \
   --port /dev/ttyACM0
 ```
@@ -334,16 +332,16 @@ python scripts/run_live_game.py \
 python scripts/run_live_game.py --mock-camera --dry-run-robot --disable-air-pump
 
 # 使用假 GPIO 测气泵流程
-python scripts/run_live_game.py --dry-run-robot --enable-air-pump --dry-run-air-pump
+python scripts/run_live_game.py --dry-run-robot --dry-run-air-pump
 
 # 显式指定树莓派上的 Rapfi
 python scripts/run_live_game.py --engine-path bin/rapfi/linux-aarch64/rapfi
 
 # 已确认路径安全后，关闭每段机械臂移动前的确认
-python scripts/run_live_game.py --enable-air-pump --full-game --no-confirm-robot-moves
+python scripts/run_live_game.py --full-game --no-confirm-robot-moves
 
 # 调试 LeRobot max_relative_target clamp 时显示原始 warning
-python scripts/run_live_game.py --enable-air-pump --show-clamp-warnings
+python scripts/run_live_game.py --show-clamp-warnings
 ```
 
 ### 测试感知管线

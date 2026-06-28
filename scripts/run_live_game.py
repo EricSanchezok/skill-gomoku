@@ -223,8 +223,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mock-camera", action="store_true", help="Use MockCamera")
     parser.add_argument("--dry-run-robot", action="store_true", help="Do not connect or move SO101")
     parser.add_argument("--dry-run-air-pump", action="store_true", help="Use fake GPIO servos")
-    parser.add_argument("--enable-air-pump", action="store_true", help="Force-enable suction")
-    parser.add_argument("--disable-air-pump", action="store_true", help="Force-disable suction")
+    parser.add_argument(
+        "--enable-air-pump",
+        action="store_true",
+        help="Deprecated: suction is enabled by default",
+    )
+    parser.add_argument("--disable-air-pump", action="store_true", help="Disable suction")
     parser.add_argument("--port", default=None, help="Override robot.port")
     parser.add_argument("--robot-id", default=None, help="Override robot.id")
     parser.add_argument("--robot-stone", choices=("black", "white"), default=None)
@@ -296,10 +300,7 @@ def _apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> No
         ai_cfg["time_per_move_ms"] = int(args.time_per_move_ms)
 
     pump_cfg = _ensure_mapping(robot_cfg, "air_pump")
-    if args.enable_air_pump:
-        pump_cfg["enabled"] = True
-    if args.disable_air_pump:
-        pump_cfg["enabled"] = False
+    pump_cfg["enabled"] = not args.disable_air_pump
     if args.dry_run_air_pump:
         pump_cfg["dry_run"] = True
 
