@@ -53,22 +53,34 @@ robot:
   pickup_pose: null
   pickup_poses:
     black:
-      shoulder_pan.pos: -78.32967032967034
-      shoulder_lift.pos: 97.23076923076923
-      elbow_flex.pos: -82.41758241758242
-      wrist_flex.pos: 84.08791208791209
-      wrist_roll.pos: 0.4835164835164835
-      gripper.pos: 0.0
+      elbow_flex.pos: -1.6263736263736264
+      gripper.pos: 24.427480916030532
+      shoulder_lift.pos: 9.758241758241759
+      shoulder_pan.pos: -82.9010989010989
+      wrist_flex.pos: 62.72527472527472
+      wrist_roll.pos: -0.4835164835164835
     white:
-      shoulder_pan.pos: -45.714285714285715
-      shoulder_lift.pos: 115.51648351648352
-      elbow_flex.pos: -101.05494505494505
-      wrist_flex.pos: 57.97802197802198
-      wrist_roll.pos: 0.21978021978021978
-      gripper.pos: 11.86675919500347
+      elbow_flex.pos: -13.23076923076923
+      gripper.pos: 53.01873698820264
+      shoulder_lift.pos: 24.52747252747253
+      shoulder_pan.pos: -46.505494505494504
+      wrist_flex.pos: 21.23076923076923
+      wrist_roll.pos: -0.13186813186813187
   pickup_top_poses:
-    black: null
-    white: null
+    black:
+      elbow_flex.pos: -13.582417582417582
+      gripper.pos: 16.516308119361554
+      shoulder_lift.pos: -33.05494505494506
+      shoulder_pan.pos: -85.53846153846153
+      wrist_flex.pos: 62.54945054945055
+      wrist_roll.pos: -0.3956043956043956
+    white:
+      elbow_flex.pos: -13.142857142857142
+      gripper.pos: 19.56974323386537
+      shoulder_lift.pos: -23.912087912087912
+      shoulder_pan.pos: -43.42857142857143
+      wrist_flex.pos: 53.142857142857146
+      wrist_roll.pos: -0.3956043956043956
   waiting_pose: waiting
   air_pump:
     enabled: false
