@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.game.ai import ai_reset, resolve_rapfi_engine_path  # noqa: E402
@@ -23,6 +25,7 @@ from src.interaction import (  # noqa: E402
 from src.orchestrator import GameOrchestrator  # noqa: E402
 from src.perception.camera import create_camera  # noqa: E402
 from src.perception.state_extractor import StateExtractor  # noqa: E402
+from src.robot.pose_mapper import load_pose_mapper_from_config  # noqa: E402
 from src.robot.so101_lowlevel_mover import (  # noqa: E402
     DEFAULT_LOWLEVEL_DT_SECONDS,
     DEFAULT_LOWLEVEL_DURATION_SECONDS,
@@ -33,6 +36,7 @@ from src.robot.so101_lowlevel_mover import (  # noqa: E402
     make_lowlevel_profile,
 )
 from src.robot.so101_mover import (  # noqa: E402
+    PRESET_ACTIONS,
     suppress_lerobot_clamp_warnings,
 )
 from src.utils.config_loader import load_config  # noqa: E402
@@ -91,8 +95,6 @@ def main() -> int:
     config_path = _project_path(args.config)
     config = load_config(config_path)
     _apply_cli_overrides(config, args)
-    _validate_engine_path(config)
-    _validate_live_config_safety(config, args)
 
     interaction = ConsoleRobotInteraction()
     human_controller = KeyboardHumanTurnController(robot_interaction=interaction)
@@ -101,14 +103,24 @@ def main() -> int:
     orchestrator = None
 
     try:
-        camera = create_camera(config, mock=args.mock_camera)
-        extractor = StateExtractor(camera=camera, config=config)
-
         if not args.dry_run_robot:
             mover = _create_mover(config, args)
             mover.connect()
             print("Holding current SO101 pose before starting...")
             mover.hold_current()
+
+        startup_menu_shown = False
+        if not args.yes:
+            startup_menu_shown = True
+            config = _run_startup_menu(config_path, config, args, mover)
+
+        _validate_engine_path(config)
+        _validate_live_config_safety(config, args)
+
+        camera = create_camera(config, mock=args.mock_camera)
+        extractor = StateExtractor(camera=camera, config=config)
+
+        if mover is not None:
             robot_mover = (
                 ConfirmingRobotMover(mover, verbose_target=args.verbose)
                 if args.confirm_robot_moves
@@ -127,7 +139,8 @@ def main() -> int:
         _validate_live_robot_safety(orchestrator, args)
         max_turns = _resolve_max_turns(args, orchestrator)
 
-        _confirm_start(args, config, orchestrator, max_turns=max_turns)
+        if not startup_menu_shown:
+            _confirm_start(args, config, orchestrator, max_turns=max_turns)
 
         board = orchestrator.start_new_game()
         print("Initial board:")
@@ -312,6 +325,128 @@ def _create_mover(config: Mapping[str, Any], args: argparse.Namespace) -> SO101L
         wrist_flex_lookahead_ticks=args.wrist_flex_lookahead,
     )
     return SO101LowLevelMover(port=port, robot_id=robot_id, profile=profile)
+
+
+def _run_startup_menu(
+    config_path: Path,
+    config: dict[str, Any],
+    args: argparse.Namespace,
+    mover: SO101LowLevelMover | None,
+) -> dict[str, Any]:
+    while True:
+        print()
+        print("Live run startup:")
+        print("  1. Move SO101 through four board corners")
+        print("  2. Recalibrate camera board corners")
+        print("  3. Re-record black/white pickup poses")
+        print("  4. Start game and move to waiting pose")
+        choice = input("Choose 1/2/3/4, or q to cancel > ").strip().lower()
+
+        if choice == "q":
+            raise KeyboardInterrupt
+        if choice in ("", "4"):
+            return config
+        if choice == "1":
+            _move_robot_to_board_corners(config, mover)
+        elif choice == "2":
+            _move_to_waiting_from_config(config, mover)
+            _run_board_visual_calibration(config_path)
+            config = load_config(config_path)
+            _apply_cli_overrides(config, args)
+        elif choice == "3":
+            _record_pickup_poses_lowlevel(config_path, mover)
+            config = load_config(config_path)
+            _apply_cli_overrides(config, args)
+        else:
+            print("Please choose 1, 2, 3, 4, or q.")
+
+
+def _move_robot_to_board_corners(
+    config: Mapping[str, Any],
+    mover: SO101LowLevelMover | None,
+) -> None:
+    if mover is None:
+        print("Robot is dry-run; no corner movement.")
+        return
+    mapper = load_pose_mapper_from_config(config, base_dir=PROJECT_ROOT)
+    if mapper is None:
+        raise ValueError("robot.pose_map.path is required for corner replay")
+
+    print("Holding current pose before corner replay...")
+    mover.hold_current()
+    for corner_name, target in zip(mapper.corner_cells(), mapper.corner_targets(), strict=True):
+        if not isinstance(target.pose, Mapping):
+            raise TypeError("SO101 corner replay requires mapping poses")
+        input(f"Press Enter to move to {corner_name} ({target.label})...")
+        print(f"Moving to {corner_name}: {target.label}")
+        mover.move_to(target.pose)
+    print("Corner replay complete.")
+
+
+def _run_board_visual_calibration(config_path: Path) -> None:
+    from scripts.calibrate_board import run_calibration
+
+    run_calibration(str(config_path))
+
+
+def _record_pickup_poses_lowlevel(
+    config_path: Path,
+    mover: SO101LowLevelMover | None,
+) -> None:
+    if mover is None:
+        print("Robot is dry-run; cannot record pickup poses.")
+        return
+
+    disk_config = load_config(config_path)
+    robot_cfg = _ensure_mapping(disk_config, "robot")
+    pickup_poses = _ensure_mapping(robot_cfg, "pickup_poses")
+    print("Torque off. Hand-guide the suction tip to each pickup pose.")
+    mover.release()
+    try:
+        for stone in ("black", "white"):
+            input(f"Move to {stone} stone pickup pose, then press Enter to record > ")
+            pose = mover.read_action()
+            pickup_poses[stone] = dict(sorted(pose.items()))
+            _write_config(config_path, disk_config)
+            print(f"Recorded {stone} pickup pose.")
+    finally:
+        print("Holding current pose...")
+        mover.hold_current()
+
+
+def _move_to_waiting_from_config(
+    config: Mapping[str, Any],
+    mover: SO101LowLevelMover | None,
+) -> None:
+    if mover is None:
+        return
+    robot_cfg = config.get("robot", {})
+    if not isinstance(robot_cfg, Mapping):
+        return
+    pose = _pose_from_config_value(robot_cfg.get("waiting_pose", "waiting"))
+    if pose is None:
+        return
+    print("Moving to waiting pose before camera calibration...")
+    mover.move_to(pose)
+
+
+def _pose_from_config_value(value: Any) -> dict[str, float] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return dict(PRESET_ACTIONS[value])
+    if not isinstance(value, Mapping):
+        raise ValueError("robot pose must be a preset name or mapping")
+    if "preset" in value:
+        return dict(PRESET_ACTIONS[str(value["preset"])])
+    return {str(key): float(item) for key, item in value.items()}
+
+
+def _write_config(path: Path, config: Mapping[str, Any]) -> None:
+    path.write_text(
+        yaml.safe_dump(dict(config), sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
 
 
 def _validate_engine_path(config: Mapping[str, Any]) -> None:

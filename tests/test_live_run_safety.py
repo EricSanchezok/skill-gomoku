@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 
 import pytest
+import yaml
 
 from src.game.play_area import PlayArea
 from src.orchestrator import GameOrchestrator
@@ -148,3 +149,64 @@ def test_confirming_robot_mover_prompts_before_delegating() -> None:
         ("read", {"joint.pos": 3.0}),
         ("move", {"joint.pos": 3.0}),
     ]
+
+
+def test_startup_menu_choice_four_starts_without_side_effects(monkeypatch, tmp_path) -> None:
+    live = _load_live_module()
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("robot: {}\ngame: {}\n", encoding="utf-8")
+
+    monkeypatch.setattr("builtins.input", lambda _prompt: "4")
+
+    config = {"robot": {}, "game": {}}
+    assert live._run_startup_menu(config_path, config, _args(), mover=None) == config
+
+
+def test_lowlevel_pickup_recording_writes_black_and_white(monkeypatch, tmp_path) -> None:
+    live = _load_live_module()
+    config_path = tmp_path / "config.yaml"
+    config = {"robot": {"pickup_poses": {}}, "game": {}}
+    config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+
+    class FakeMover:
+        def __init__(self):
+            self.events = []
+            self.poses = iter(
+                [
+                    {"shoulder_pan.pos": 1.0, "gripper.pos": 2.0},
+                    {"shoulder_pan.pos": 3.0, "gripper.pos": 4.0},
+                ]
+            )
+
+        def release(self):
+            self.events.append("release")
+
+        def read_action(self):
+            self.events.append("read")
+            return next(self.poses)
+
+        def hold_current(self):
+            self.events.append("hold")
+
+    mover = FakeMover()
+    monkeypatch.setattr("builtins.input", lambda _prompt: "")
+
+    live._record_pickup_poses_lowlevel(config_path, mover)
+
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["robot"]["pickup_poses"]["black"]["shoulder_pan.pos"] == 1.0
+    assert saved["robot"]["pickup_poses"]["white"]["gripper.pos"] == 4.0
+    assert mover.events == ["release", "read", "read", "hold"]
+
+
+def test_move_to_waiting_from_config_uses_waiting_preset() -> None:
+    live = _load_live_module()
+    moves = []
+
+    class FakeMover:
+        def move_to(self, pose):
+            moves.append(dict(pose))
+
+    live._move_to_waiting_from_config({"robot": {"waiting_pose": "waiting"}}, FakeMover())
+
+    assert moves == [live.PRESET_ACTIONS["waiting"]]
