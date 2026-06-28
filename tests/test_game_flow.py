@@ -190,6 +190,25 @@ def test_sync_board_state_adopts_latest_camera_board() -> None:
     assert orchestrator.move_count == 1
 
 
+def test_sync_board_state_keeps_current_board_when_camera_loses_stones() -> None:
+    class FakeExtractor:
+        def extract(self):
+            return EMPTY_BOARD.copy(), None
+
+    orchestrator = orchestrator_module.GameOrchestrator(
+        state_extractor=FakeExtractor(),
+        my_stone=BLACK,
+    )
+    orchestrator.board.place(7, 7, BLACK)
+    orchestrator.move_count = 1
+
+    synced = orchestrator.sync_board_state()
+
+    assert synced is orchestrator.board
+    assert orchestrator.board.get(7, 7) == BLACK
+    assert orchestrator.move_count == 1
+
+
 def test_run_once_skips_ai_when_robot_is_not_next_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail_ai_decide(_board, _stone):
         pytest.fail("AI should not move before the human first move")

@@ -133,16 +133,23 @@ def test_live_robot_allows_recorded_pickup_pose() -> None:
     live._validate_live_robot_safety(orchestrator, _args())
 
 
-def test_live_run_defaults_to_one_turn_unless_full_game_is_requested() -> None:
+def test_live_run_defaults_to_three_turns_unless_full_game_is_requested() -> None:
     live = _load_live_module()
     orchestrator = GameOrchestrator(
         state_extractor=object(),
         play_area=PlayArea(row_offset=3, col_offset=3, rows=9, cols=9),
     )
 
-    assert live._resolve_max_turns(_args(), orchestrator) == 1
+    assert live._resolve_max_turns(_args(), orchestrator) == 3
     assert live._resolve_max_turns(_args(full_game=True), orchestrator) == 81
     assert live._resolve_max_turns(_args(max_turns=4), orchestrator) == 4
+
+
+def test_live_run_waits_for_human_before_camera_sync_by_default() -> None:
+    live = _load_live_module()
+
+    assert live._build_parser().parse_args([]).sync_after_robot is False
+    assert live._build_parser().parse_args(["--sync-after-robot"]).sync_after_robot is True
 
 
 def test_live_run_enables_air_pump_by_default() -> None:

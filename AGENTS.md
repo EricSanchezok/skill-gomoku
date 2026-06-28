@@ -29,6 +29,21 @@ or out of the pickup box can hit stones, the board, or the box.
 - Do not replace the verified low-level motion parameters unless the user is
   explicitly debugging motion on the real arm.
 
+## Interaction And Voice Boundary
+
+- Keep speech, wake-word, TTS, ASR, and other human-facing interaction code
+  behind the ports in `src/interaction.py`.
+- Voice implementations should implement `RobotInteractionController` and be
+  injected into `GameOrchestrator`; do not make the orchestrator import voice
+  packages directly.
+- Voice code must not depend on robot motion, perception, Rapfi, GPIO, or board
+  pose-map internals. Those modules may call the interaction port, but the
+  dependency must not point back into them.
+- Keyboard confirmation remains the default human-turn controller unless the
+  user explicitly wires a different controller.
+- See `docs/adr/0001-voice-interaction-boundary.md` before changing this
+  dependency direction.
+
 ## Verification
 
 After changing live robot motion, run at least:

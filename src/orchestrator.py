@@ -282,8 +282,19 @@ class GameOrchestrator:
         """Capture the current physical board and adopt it as game state."""
 
         self.move_to_waiting_pose()
-        self.board = self.get_board_state()
-        self.move_count = sum(_stone_counts(self.board.state))
+        camera_board = self.get_board_state()
+        current_count = sum(_stone_counts(self.board.state))
+        camera_count = sum(_stone_counts(camera_board.state))
+        if camera_count < current_count:
+            logger.warning(
+                "Skipping camera sync because detected stone count regressed "
+                "from %d to %d",
+                current_count,
+                camera_count,
+            )
+            return self.board
+        self.board = camera_board
+        self.move_count = camera_count
         return self.board
 
     def is_play_area_full(self) -> bool:

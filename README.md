@@ -316,7 +316,7 @@ python scripts/run_live_game.py \
   --port /dev/ttyACM0
 ```
 
-真机默认是安全 bring-up：最多跑 1 个 turn，每次 SO101 移动前都需要人工确认。
+真机默认是安全 bring-up：最多跑 3 个 turn，每次 SO101 移动前都需要人工确认。
 确认棋盒、棋盘和路径都没问题后，再显式跑完整对局：
 
 ```bash
@@ -339,6 +339,9 @@ python scripts/run_live_game.py --engine-path bin/rapfi/linux-aarch64/rapfi
 
 # 已确认路径安全后，关闭每段机械臂移动前的确认
 python scripts/run_live_game.py --full-game --no-confirm-robot-moves
+
+# 调试机器人落子后的即时视觉同步；默认等人类确认后再识别
+python scripts/run_live_game.py --sync-after-robot
 
 # 调试 LeRobot max_relative_target clamp 时显示原始 warning
 python scripts/run_live_game.py --show-clamp-warnings

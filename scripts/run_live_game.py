@@ -43,6 +43,7 @@ from src.utils.config_loader import load_config  # noqa: E402
 from src.utils.constants import BOARD_COLS, BOARD_ROWS, EMPTY  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_LIVE_MAX_TURNS = 3
 
 logger = logging.getLogger("run_live_game")
 
@@ -248,17 +249,28 @@ def _build_parser() -> argparse.ArgumentParser:
         "--max-turns",
         type=int,
         default=None,
-        help="Maximum live loop turns. Default is 1 for safer hardware bring-up.",
+        help=f"Maximum live loop turns. Default is {DEFAULT_LIVE_MAX_TURNS}.",
     )
     parser.add_argument(
         "--full-game",
         action="store_true",
-        help="Run until the configured play area is full instead of the one-turn safety default.",
+        help="Run until the configured play area is full instead of the safety default.",
     )
     parser.add_argument("--human-attempts", type=int, default=30)
     parser.add_argument("--poll-interval", type=float, default=1.0)
     parser.add_argument("--robot-settle-seconds", type=float, default=0.5)
-    parser.add_argument("--no-sync-after-robot", dest="sync_after_robot", action="store_false")
+    parser.add_argument(
+        "--sync-after-robot",
+        dest="sync_after_robot",
+        action="store_true",
+        help="Debug: capture camera state immediately after robot moves",
+    )
+    parser.add_argument(
+        "--no-sync-after-robot",
+        dest="sync_after_robot",
+        action="store_false",
+        help=argparse.SUPPRESS,
+    )
     parser.add_argument(
         "--no-confirm-robot-moves",
         dest="confirm_robot_moves",
@@ -278,7 +290,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yes", action="store_true", help="Skip final start confirmation")
     parser.add_argument("--release-on-exit", action="store_true")
     parser.add_argument("--verbose", action="store_true")
-    parser.set_defaults(sync_after_robot=True, confirm_robot_moves=True)
+    parser.set_defaults(sync_after_robot=False, confirm_robot_moves=True)
     return parser
 
 
@@ -591,7 +603,7 @@ def _resolve_max_turns(args: argparse.Namespace, orchestrator: GameOrchestrator)
         return args.max_turns
     if args.full_game:
         return orchestrator.play_area.rows * orchestrator.play_area.cols
-    return 1
+    return DEFAULT_LIVE_MAX_TURNS
 
 
 def _confirm_start(

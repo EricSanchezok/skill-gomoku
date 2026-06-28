@@ -211,7 +211,7 @@ finally:
 python scripts/run_live_game.py
 ```
 
-真机默认是保守 bring-up 模式：最多跑 1 个 turn，并且每一次 SO101
+真机默认是保守 bring-up 模式：最多跑 3 个 turn，并且每一次 SO101
 移动前都会打印最大关节变化摘要，等待人工按 Enter。确认完整路径、
 棋盒位置和棋盘位置都安全后，才考虑加 `--full-game` 或 `--max-turns N`。如果要
 关闭逐步确认，必须显式加 `--no-confirm-robot-moves`。
@@ -328,6 +328,8 @@ robot:
 完整对局节奏是：`waiting_pose` → `pickup_top` → 抓棋子 → `pickup_top` →
 `waiting_pose` → 下棋的位置 → `waiting_pose` →
 人类下棋 → 人类确认 → 视觉识别 → AI 分析 → 再抓棋子。
+机器人落子后默认不会立刻做视觉同步；需要调试这个路径时再显式加
+`--sync-after-robot`。
 
 录黑/白两个取子位和对应 top 安全位：
 
