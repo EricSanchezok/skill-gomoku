@@ -15,6 +15,7 @@ from src.game.play_area import PlayArea, parse_play_area_config
 from src.interaction import (
     HumanTurnCommand,
     HumanTurnResult,
+    KeyboardControlKeys,
     KeyboardHumanTurnController,
 )
 from src.robot.pose_mapper import MeasuredBoardPoseMapper
@@ -396,6 +397,22 @@ def test_keyboard_human_turn_controller_dispatches_reserved_actions() -> None:
         ("dance", "gomoku_waiting"),
         ("skill", {"expected_stone": "黑棋", "board_state": "board"}),
     ]
+
+
+def test_keyboard_human_turn_controller_ignores_stale_empty_enter() -> None:
+    inputs = iter(["", "done"])
+    messages = []
+
+    controller = KeyboardHumanTurnController(
+        input_fn=lambda _prompt: next(inputs),
+        print_fn=messages.append,
+        keys=KeyboardControlKeys(min_empty_enter_seconds=999.0),
+    )
+
+    result = controller.wait_for_move_done(expected_stone=BLACK)
+
+    assert result.command == HumanTurnCommand.MOVE_DONE
+    assert messages == ["忽略过早的 Enter，防止上一轮输入残留。请下完棋后再确认。"]
 
 
 def test_orchestrator_hri_hooks_forward_to_interaction_controller() -> None:

@@ -319,12 +319,14 @@ class GameOrchestrator:
 
         self.move_to_waiting_pose()
         if self.human_turn_controller is not None and confirm_human:
+            logger.info("Waiting for human move confirmation before perception")
             result = self.human_turn_controller.wait_for_move_done(
                 expected_stone=self.human_stone,
                 board_state=self.board.state.copy(),
             )
             if result.command == HumanTurnCommand.QUIT:
                 return None
+            logger.info("Human move confirmed; starting perception polling")
 
         for _ in range(max_attempts):
             time.sleep(poll_interval_seconds)

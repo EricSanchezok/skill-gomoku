@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -88,6 +89,7 @@ class KeyboardControlKeys:
     speak_key: str = "s"
     dance_key: str = "d"
     skill_gomoku_key: str = "g"
+    min_empty_enter_seconds: float = 0.25
 
 
 class KeyboardHumanTurnController:
@@ -126,8 +128,17 @@ class KeyboardHumanTurnController:
             f"{self._keys.quit_key}=退出 > "
         )
         while True:
+            started = time.monotonic()
             raw = self._input(prompt)
+            elapsed = time.monotonic() - started
             command = self._normalize_key(raw)
+            if (
+                raw == ""
+                and command in self._confirm_keys
+                and elapsed < self._keys.min_empty_enter_seconds
+            ):
+                self._print("忽略过早的 Enter，防止上一轮输入残留。请下完棋后再确认。")
+                continue
             if command in self._confirm_keys:
                 return HumanTurnResult(HumanTurnCommand.MOVE_DONE)
             if command == self._keys.quit_key:

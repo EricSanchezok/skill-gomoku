@@ -11,7 +11,7 @@ import json
 import math
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -48,10 +48,14 @@ ADDR_PRESENT_POS = 56
 TORQUE_OFF = 0
 TORQUE_ON = 1
 
-DEFAULT_LOWLEVEL_DURATION_SECONDS = 12.0
+DEFAULT_LOWLEVEL_DURATION_SECONDS = 6.0
 DEFAULT_LOWLEVEL_DT_SECONDS = 0.02
 DEFAULT_LOWLEVEL_SETTLE_SECONDS = 2.0
 DEFAULT_LOWLEVEL_TOLERANCE_TICKS = 4
+DEFAULT_LOWLEVEL_SMALL_MOVE_TICKS = 80
+DEFAULT_LOWLEVEL_NORMAL_MOVE_TICKS = 500
+DEFAULT_LOWLEVEL_SMALL_MOVE_SECONDS = 1.0
+DEFAULT_LOWLEVEL_NORMAL_MOVE_SECONDS = 4.0
 DEFAULT_LOWLEVEL_LOOKAHEAD_TICKS = {
     "shoulder_pan": 24,
     "shoulder_lift": 80,
@@ -78,6 +82,11 @@ class LowLevelMotionProfile:
     dt_seconds: float = DEFAULT_LOWLEVEL_DT_SECONDS
     settle_seconds: float = DEFAULT_LOWLEVEL_SETTLE_SECONDS
     tolerance_ticks: int = DEFAULT_LOWLEVEL_TOLERANCE_TICKS
+    adaptive_duration: bool = True
+    small_move_ticks: int = DEFAULT_LOWLEVEL_SMALL_MOVE_TICKS
+    normal_move_ticks: int = DEFAULT_LOWLEVEL_NORMAL_MOVE_TICKS
+    small_move_seconds: float = DEFAULT_LOWLEVEL_SMALL_MOVE_SECONDS
+    normal_move_seconds: float = DEFAULT_LOWLEVEL_NORMAL_MOVE_SECONDS
     lookahead_ticks: Mapping[str, int] = field(
         default_factory=lambda: dict(DEFAULT_LOWLEVEL_LOOKAHEAD_TICKS)
     )
@@ -96,6 +105,21 @@ class LowLevelMotionProfile:
 
     def lookahead_for(self, motor: str) -> int:
         return int(self.lookahead_ticks.get(motor, DEFAULT_LOWLEVEL_LOOKAHEAD_TICKS[motor]))
+
+    def duration_for_error(self, raw_error_ticks: int) -> float:
+        if not self.adaptive_duration:
+            return self.duration_seconds
+        if raw_error_ticks <= self.small_move_ticks:
+            return min(self.duration_seconds, self.small_move_seconds)
+        if raw_error_ticks <= self.normal_move_ticks:
+            return min(self.duration_seconds, self.normal_move_seconds)
+        return self.duration_seconds
+
+    def for_error(self, raw_error_ticks: int) -> LowLevelMotionProfile:
+        duration = self.duration_for_error(raw_error_ticks)
+        if duration == self.duration_seconds:
+            return self
+        return replace(self, duration_seconds=duration)
 
 
 def load_lerobot_motor_calibration(
@@ -230,6 +254,11 @@ def make_lowlevel_profile(
     lift_lookahead_ticks: int | None = None,
     elbow_lookahead_ticks: int | None = None,
     wrist_flex_lookahead_ticks: int | None = None,
+    adaptive_duration: bool = True,
+    small_move_ticks: int = DEFAULT_LOWLEVEL_SMALL_MOVE_TICKS,
+    normal_move_ticks: int = DEFAULT_LOWLEVEL_NORMAL_MOVE_TICKS,
+    small_move_seconds: float = DEFAULT_LOWLEVEL_SMALL_MOVE_SECONDS,
+    normal_move_seconds: float = DEFAULT_LOWLEVEL_NORMAL_MOVE_SECONDS,
 ) -> LowLevelMotionProfile:
     lookahead = dict(DEFAULT_LOWLEVEL_LOOKAHEAD_TICKS)
     if lookahead_ticks is not None:
@@ -248,6 +277,11 @@ def make_lowlevel_profile(
         dt_seconds=dt_seconds,
         settle_seconds=settle_seconds,
         tolerance_ticks=tolerance_ticks,
+        adaptive_duration=adaptive_duration,
+        small_move_ticks=int(small_move_ticks),
+        normal_move_ticks=int(normal_move_ticks),
+        small_move_seconds=float(small_move_seconds),
+        normal_move_seconds=float(normal_move_seconds),
         lookahead_ticks=lookahead,
     )
 
@@ -332,6 +366,7 @@ class SO101LowLevelMover:
         active_profile = profile or self.profile
         target = lerobot_action_to_raw(target_action, self.calibration)
         start = self.read_raw(target_action)
+        active_profile = active_profile.for_error(max_raw_error(start, target))
         steps = active_profile.steps()
         started = time.monotonic()
 

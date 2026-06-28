@@ -531,7 +531,7 @@ def test_so101_lerobot_action_converts_to_lowlevel_raw_ticks() -> None:
 def test_lowlevel_profile_keeps_verified_v3_lookahead_defaults() -> None:
     profile = make_lowlevel_profile()
 
-    assert profile.duration_seconds == 12.0
+    assert profile.duration_seconds == 6.0
     assert profile.dt_seconds == 0.02
     assert profile.lookahead_for("shoulder_pan") == 24
     assert profile.lookahead_for("shoulder_lift") == 80
@@ -539,6 +539,16 @@ def test_lowlevel_profile_keeps_verified_v3_lookahead_defaults() -> None:
     assert profile.lookahead_for("wrist_flex") == 24
     assert profile.lookahead_for("wrist_roll") == 8
     assert profile.lookahead_for("gripper") == 8
+
+
+def test_lowlevel_profile_shortens_duration_by_distance() -> None:
+    profile = make_lowlevel_profile()
+
+    assert profile.duration_for_error(30) == pytest.approx(1.0)
+    assert profile.duration_for_error(300) == pytest.approx(4.0)
+    assert profile.duration_for_error(900) == pytest.approx(6.0)
+    assert profile.for_error(30).steps() == 50
+    assert profile.for_error(300).steps() == 200
 
 
 def test_so101_move_to_streams_intermediate_targets_then_final_target() -> None:
