@@ -217,7 +217,8 @@ python scripts/run_live_game.py
 关闭逐步确认，必须显式加 `--no-confirm-robot-moves`。
 
 真机运行会强制检查当前机器人棋色对应的取子位。也就是说
-`robot.pickup_poses.black` 或 `robot.pickup_poses.white` 至少要录好当前棋色；
+`robot.pickup_poses.black/white` 和 `robot.pickup_top_poses.black/white`
+至少要录好当前棋色；
 缺失时脚本会拒绝开局，不会再从当前位置直接吸棋、乱走。
 
 建议按这个顺序上真机：
@@ -292,6 +293,9 @@ robot:
   pickup_poses:
     black: null
     white: null
+  pickup_top_poses:
+    black: null
+    white: null
   waiting_pose: waiting
   air_pump:
     enabled: true
@@ -309,17 +313,22 @@ robot:
 
 所以完整落子顺序是：
 
-1. 按机器人棋色移动到 `robot.pickup_poses.black` 或 `robot.pickup_poses.white`；如果没有配置对应棋色，退回旧的 `robot.pickup_pose`。
-2. 调用气泵 `pick_stone()`，建立吸力。
-3. 移动到 `robot.waiting_pose`，确保转场稳定。
-4. 移动到目标棋位 action。
-5. 调用气泵 `drop_stone()`，关阀落子并关泵。
-6. 回到 `robot.waiting_pose`，避免挡住相机。
+1. 从 `robot.waiting_pose` 移动到当前棋色的 `robot.pickup_top_poses.black` 或 `robot.pickup_top_poses.white`。
+2. 垂直进入当前棋色的 `robot.pickup_poses.black` 或 `robot.pickup_poses.white`；如果没有配置对应棋色，退回旧的 `robot.pickup_pose`。
+3. 调用气泵 `pick_stone()`，建立吸力。
+4. 回到当前棋色的 `robot.pickup_top_poses.black` 或 `robot.pickup_top_poses.white`。
+5. 移动到 `robot.waiting_pose`，确保转场稳定。
+6. 移动到目标棋位 action。
+7. 调用气泵 `drop_stone()`，关阀落子并关泵。
+8. 回到 `robot.waiting_pose`，避免挡住相机。
 
-完整对局节奏是：抓棋子 → `waiting_pose` → 下棋的位置 → `waiting_pose` →
+不要从棋盒低位 `pickup_poses.*` 直接去 `waiting_pose`，这会撞到棋盒边缘。
+
+完整对局节奏是：`waiting_pose` → `pickup_top` → 抓棋子 → `pickup_top` →
+`waiting_pose` → 下棋的位置 → `waiting_pose` →
 人类下棋 → 人类确认 → 视觉识别 → AI 分析 → 再抓棋子。
 
-录黑/白两个取子位：
+录黑/白两个取子位和对应 top 安全位：
 
 ```bash
 conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyACM0

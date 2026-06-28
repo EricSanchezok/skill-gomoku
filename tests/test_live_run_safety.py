@@ -92,11 +92,29 @@ def test_live_config_allows_matching_pickup_pose_before_hardware_startup() -> No
             "robot": {
                 "waiting_pose": "waiting",
                 "pickup_poses": {"black": {"joint.pos": 1.0}, "white": None},
+                "pickup_top_poses": {"black": {"joint.pos": 2.0}, "white": None},
             },
             "game": {"robot_stone": "black"},
         },
         _args(),
     )
+
+
+def test_live_config_rejects_missing_pickup_top_pose_before_hardware_startup() -> None:
+    live = _load_live_module()
+
+    with pytest.raises(ValueError, match="pickup top pose"):
+        live._validate_live_config_safety(
+            {
+                "robot": {
+                    "waiting_pose": "waiting",
+                    "pickup_poses": {"black": {"joint.pos": 1.0}, "white": None},
+                    "pickup_top_poses": {"black": None, "white": None},
+                },
+                "game": {"robot_stone": "black"},
+            },
+            _args(),
+        )
 
 
 def test_live_robot_allows_recorded_pickup_pose() -> None:
@@ -107,6 +125,7 @@ def test_live_robot_allows_recorded_pickup_pose() -> None:
         pose_mapper=mapper,
         robot_mover=object(),
         pickup_pose={"joint.pos": -1.0},
+        pickup_top_pose={"joint.pos": -0.5},
         waiting_pose={"joint.pos": 0.0},
         my_stone=BLACK,
     )
@@ -166,7 +185,7 @@ def test_startup_menu_choice_four_starts_without_side_effects(monkeypatch, tmp_p
 def test_lowlevel_pickup_recording_writes_black_and_white(monkeypatch, tmp_path) -> None:
     live = _load_live_module()
     config_path = tmp_path / "config.yaml"
-    config = {"robot": {"pickup_poses": {}}, "game": {}}
+    config = {"robot": {"pickup_poses": {}, "pickup_top_poses": {}}, "game": {}}
     config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
 
     class FakeMover:
@@ -176,6 +195,8 @@ def test_lowlevel_pickup_recording_writes_black_and_white(monkeypatch, tmp_path)
                 [
                     {"shoulder_pan.pos": 1.0, "gripper.pos": 2.0},
                     {"shoulder_pan.pos": 3.0, "gripper.pos": 4.0},
+                    {"shoulder_pan.pos": 5.0, "gripper.pos": 6.0},
+                    {"shoulder_pan.pos": 7.0, "gripper.pos": 8.0},
                 ]
             )
 
@@ -196,8 +217,10 @@ def test_lowlevel_pickup_recording_writes_black_and_white(monkeypatch, tmp_path)
 
     saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert saved["robot"]["pickup_poses"]["black"]["shoulder_pan.pos"] == 1.0
-    assert saved["robot"]["pickup_poses"]["white"]["gripper.pos"] == 4.0
-    assert mover.events == ["release", "read", "read", "hold"]
+    assert saved["robot"]["pickup_top_poses"]["black"]["gripper.pos"] == 4.0
+    assert saved["robot"]["pickup_poses"]["white"]["shoulder_pan.pos"] == 5.0
+    assert saved["robot"]["pickup_top_poses"]["white"]["gripper.pos"] == 8.0
+    assert mover.events == ["release", "read", "read", "read", "read", "hold"]
 
 
 def test_corner_replay_routes_every_board_corner_through_waiting(

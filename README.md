@@ -270,6 +270,9 @@ robot:
   pickup_poses:
     black: null
     white: null
+  pickup_top_poses:
+    black: null
+    white: null
   waiting_pose: waiting
   air_pump:
     enabled: true
@@ -279,12 +282,14 @@ robot:
     drop_delay_seconds: 0.05
 ```
 
-落子动作顺序是：按机器人棋色移动到 `pickup_poses.black` 或 `pickup_poses.white`
-（没有配置时退回旧的 `pickup_pose`）→ 开电磁阀并开气泵吸棋子 →
+落子动作顺序是：`waiting_pose` → 按机器人棋色移动到
+`pickup_top_poses.black/white` → 移动到 `pickup_poses.black/white` →
+开电磁阀并开气泵吸棋子 → 回到对应 `pickup_top_poses.black/white` →
 移动到 `waiting_pose` → 移动到目标棋位 → 关闭电磁阀落子 → 关闭气泵降噪 →
-回到 `waiting_pose`。之后才进入人类下棋、确认、视觉识别和 AI 分析，避免机械臂挡住相机。
+回到 `waiting_pose`。不要从棋盒低位 `pickup_poses.*` 直接去 `waiting_pose`。
+之后才进入人类下棋、确认、视觉识别和 AI 分析，避免机械臂挡住相机。
 
-录黑/白两个取子位：
+录黑/白两个取子位和对应 top 安全位：
 
 ```bash
 conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyACM0
@@ -303,7 +308,8 @@ python scripts/run_live_game.py \
 ```
 
 在树莓派上真机运行时，确认 `robot.port`、`robot.pickup_poses.black/white`、
-`robot.waiting_pose`、气泵 GPIO、相机角点和 Rapfi Linux 二进制都准备好，再运行：
+`robot.pickup_top_poses.black/white`、`robot.waiting_pose`、气泵 GPIO、
+相机角点和 Rapfi Linux 二进制都准备好，再运行：
 
 ```bash
 python scripts/run_live_game.py \

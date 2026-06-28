@@ -66,6 +66,9 @@ robot:
       wrist_flex.pos: 57.97802197802198
       wrist_roll.pos: 0.21978021978021978
       gripper.pos: 11.86675919500347
+  pickup_top_poses:
+    black: null
+    white: null
   waiting_pose: waiting
   air_pump:
     enabled: false

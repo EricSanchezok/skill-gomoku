@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Record black/white stone pickup poses into the config YAML.
+"""Record black/white stone pickup poses and pickup-top poses into the config YAML.
 
 The live game uses ``robot.pickup_poses.<black|white>`` when present, and falls
 back to legacy ``robot.pickup_pose`` only when the colour-specific pose is not
@@ -66,8 +66,15 @@ def main() -> int:
             )
             pose = _normalise_action(sampler.read_current_pose())
             _set_pickup_pose(config, stone, pose)
+            input(
+                f"Move the suction tip to {stone} pickup top pose / "
+                f"{'黑棋' if stone == 'black' else '白棋'}取子上方安全位, "
+                "then press Enter to record > "
+            )
+            top_pose = _normalise_action(sampler.read_current_pose())
+            _set_pickup_top_pose(config, stone, top_pose)
             _write_config(config_path, config)
-            print(f"Recorded {stone} pickup pose and saved config.")
+            print(f"Recorded {stone} pickup pose + top pose and saved config.")
 
         print("\nDone. Live game will pick the pose matching game.robot_stone.")
         return 0
@@ -140,7 +147,8 @@ def _print_summary(config_path: Path, stones: list[str], config: Mapping[str, An
     print(f"Will record: {', '.join(stones)}")
     for stone in STONE_ORDER:
         status = "configured" if isinstance(pickup_poses.get(stone), Mapping) else "missing"
-        print(f"  {stone}: {status}")
+        top_status = _pickup_top_status(robot_cfg, stone)
+        print(f"  {stone}: pickup={status}, pickup_top={top_status}")
 
 
 def _set_pickup_pose(config: dict[str, Any], stone: str, pose: Mapping[str, float]) -> None:
@@ -151,6 +159,25 @@ def _set_pickup_pose(config: dict[str, Any], stone: str, pose: Mapping[str, floa
     if not isinstance(pickup_poses, dict):
         raise ValueError("config.robot.pickup_poses must be a mapping")
     pickup_poses[stone] = dict(pose)
+
+
+def _set_pickup_top_pose(config: dict[str, Any], stone: str, pose: Mapping[str, float]) -> None:
+    robot_cfg = config.setdefault("robot", {})
+    if not isinstance(robot_cfg, dict):
+        raise ValueError("config.robot must be a mapping")
+    pickup_top_poses = robot_cfg.setdefault("pickup_top_poses", {})
+    if not isinstance(pickup_top_poses, dict):
+        raise ValueError("config.robot.pickup_top_poses must be a mapping")
+    pickup_top_poses[stone] = dict(pose)
+
+
+def _pickup_top_status(robot_cfg: Any, stone: str) -> str:
+    if not isinstance(robot_cfg, Mapping):
+        return "missing"
+    pickup_top_poses = robot_cfg.get("pickup_top_poses", {})
+    if not isinstance(pickup_top_poses, Mapping):
+        return "missing"
+    return "configured" if isinstance(pickup_top_poses.get(stone), Mapping) else "missing"
 
 
 def _normalise_action(action: Any) -> dict[str, float]:

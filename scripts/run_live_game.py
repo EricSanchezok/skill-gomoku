@@ -338,7 +338,7 @@ def _run_startup_menu(
         print("Live run startup:")
         print("  1. Move SO101 through four board corners")
         print("  2. Recalibrate camera board corners")
-        print("  3. Re-record black/white pickup poses")
+        print("  3. Re-record black/white pickup poses and top poses")
         print("  4. Start game and move to waiting pose")
         choice = input("Choose 1/2/3/4, or q to cancel > ").strip().lower()
 
@@ -407,15 +407,17 @@ def _record_pickup_poses_lowlevel(
     disk_config = load_config(config_path)
     robot_cfg = _ensure_mapping(disk_config, "robot")
     pickup_poses = _ensure_mapping(robot_cfg, "pickup_poses")
-    print("Torque off. Hand-guide the suction tip to each pickup pose.")
+    pickup_top_poses = _ensure_mapping(robot_cfg, "pickup_top_poses")
+    print("Torque off. Hand-guide the suction tip to each pickup pose and top pose.")
     mover.release()
     try:
         for stone in ("black", "white"):
             input(f"Move to {stone} stone pickup pose, then press Enter to record > ")
-            pose = mover.read_action()
-            pickup_poses[stone] = dict(sorted(pose.items()))
+            pickup_poses[stone] = dict(sorted(mover.read_action().items()))
+            input(f"Move to {stone} pickup top pose, then press Enter to record > ")
+            pickup_top_poses[stone] = dict(sorted(mover.read_action().items()))
             _write_config(config_path, disk_config)
-            print(f"Recorded {stone} pickup pose.")
+            print(f"Recorded {stone} pickup pose and pickup top pose.")
     finally:
         print("Holding current pose...")
         mover.hold_current()
@@ -528,6 +530,15 @@ def _validate_live_robot_safety(
             "`python scripts/record_pickup_poses.py`, or pass "
             "--allow-missing-pickup-pose only for deliberate dry movement tests."
         )
+    pickup_top_pose = orchestrator.pickup_top_poses.get(
+        orchestrator.robot_stone,
+        orchestrator.pickup_top_pose,
+    )
+    if pickup_pose is not None and pickup_top_pose is None:
+        raise ValueError(
+            "Missing pickup top pose for the robot stone. Record "
+            "robot.pickup_top_poses.black/white before live runs."
+        )
 
 
 def _validate_live_config_safety(
@@ -559,6 +570,16 @@ def _validate_live_config_safety(
         raise ValueError(
             "Missing pickup pose for the configured robot stone before hardware startup. "
             "Run `python scripts/record_pickup_poses.py` first."
+        )
+    pickup_top_pose = None
+    pickup_top_poses = robot_cfg.get("pickup_top_poses")
+    if isinstance(pickup_top_poses, Mapping):
+        pickup_top_pose = pickup_top_poses.get(robot_stone)
+    pickup_top_pose = pickup_top_pose or robot_cfg.get("pickup_top_pose")
+    if pickup_pose is not None and pickup_top_pose is None:
+        raise ValueError(
+            "Missing pickup top pose for the configured robot stone before hardware startup. "
+            "Record robot.pickup_top_poses.black/white first."
         )
 
 

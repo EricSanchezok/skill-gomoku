@@ -42,6 +42,8 @@ class RobotMoveTargets:
 
     pickup_pose: dict[str, float] | None = None
     pickup_poses: dict[int, dict[str, float]] | None = None
+    pickup_top_pose: dict[str, float] | None = None
+    pickup_top_poses: dict[int, dict[str, float]] | None = None
     waiting_pose: dict[str, float] | None = None
 
 
@@ -63,6 +65,8 @@ class GameOrchestrator:
         suction_controller: SuctionController | None = None,
         pickup_pose: Mapping[str, float] | None = None,
         pickup_poses: Mapping[int, Mapping[str, float]] | None = None,
+        pickup_top_pose: Mapping[str, float] | None = None,
+        pickup_top_poses: Mapping[int, Mapping[str, float]] | None = None,
         waiting_pose: Mapping[str, float] | None = None,
         play_area: PlayArea | None = None,
         human_turn_controller: HumanTurnController | None = None,
@@ -82,10 +86,18 @@ class GameOrchestrator:
                 if pickup_poses is not None
                 else None
             ),
+            pickup_top_pose=dict(pickup_top_pose) if pickup_top_pose is not None else None,
+            pickup_top_poses=(
+                {int(stone): dict(pose) for stone, pose in pickup_top_poses.items()}
+                if pickup_top_poses is not None
+                else None
+            ),
             waiting_pose=dict(waiting_pose) if waiting_pose is not None else None,
         )
         self.pickup_pose = self.move_targets.pickup_pose
         self.pickup_poses = self.move_targets.pickup_poses or {}
+        self.pickup_top_pose = self.move_targets.pickup_top_pose
+        self.pickup_top_poses = self.move_targets.pickup_top_poses or {}
         self.waiting_pose = self.move_targets.waiting_pose
         self.play_area = play_area or PlayArea.full()
         self.robot_stone = my_stone
@@ -145,6 +157,14 @@ class GameOrchestrator:
                 "robot.pickup_pose",
             ),
             pickup_poses=_parse_pickup_poses(robot_cfg.get("pickup_poses")),
+            pickup_top_pose=_parse_optional_robot_pose(
+                robot_cfg.get("pickup_top_pose"),
+                "robot.pickup_top_pose",
+            ),
+            pickup_top_poses=_parse_stone_poses(
+                robot_cfg.get("pickup_top_poses"),
+                "robot.pickup_top_poses",
+            ),
             waiting_pose=_parse_optional_robot_pose(
                 robot_cfg.get("waiting_pose", "waiting"),
                 "robot.waiting_pose",
@@ -322,14 +342,22 @@ class GameOrchestrator:
         if self.robot_mover is not None:
             if not isinstance(target, Mapping):
                 raise TypeError("robot_mover integration requires a mapping robot target")
+            if self.waiting_pose is None:
+                raise ValueError("waiting_pose is required before moving to a board target")
             stone_picked = False
             try:
                 pickup_pose = self._pickup_pose_for_robot_stone()
+                pickup_top_pose = self._pickup_top_pose_for_robot_stone()
                 if pickup_pose is not None:
+                    if pickup_top_pose is None:
+                        raise ValueError("pickup_top_pose is required when pickup_pose is used")
+                    self.robot_mover.move_to(pickup_top_pose)
                     self.robot_mover.move_to(pickup_pose)
                 if self.suction_controller is not None:
                     self.suction_controller.pick_stone()
                     stone_picked = True
+                if pickup_pose is not None and pickup_top_pose is not None:
+                    self.robot_mover.move_to(pickup_top_pose)
                 self.move_to_waiting_pose()
                 self.robot_mover.move_to(target)
                 if self.suction_controller is not None:
@@ -402,6 +430,11 @@ class GameOrchestrator:
 
         return self.pickup_poses.get(self.robot_stone, self.pickup_pose)
 
+    def _pickup_top_pose_for_robot_stone(self) -> dict[str, float] | None:
+        """Return the safe pickup exit/entry pose for the configured stone colour."""
+
+        return self.pickup_top_poses.get(self.robot_stone, self.pickup_top_pose)
+
     def _target_for_cell(self, row: int, col: int) -> RobotPose:
         if not self.play_area.contains(row, col):
             raise ValueError(
@@ -464,10 +497,14 @@ def _parse_optional_robot_pose(value: Any, field_name: str) -> dict[str, float] 
 
 
 def _parse_pickup_poses(value: Any) -> dict[int, dict[str, float]] | None:
+    return _parse_stone_poses(value, "robot.pickup_poses")
+
+
+def _parse_stone_poses(value: Any, field_name: str) -> dict[int, dict[str, float]] | None:
     if value is None:
         return None
     if not isinstance(value, Mapping):
-        raise ValueError("robot.pickup_poses must be a mapping with black/white keys")
+        raise ValueError(f"{field_name} must be a mapping with black/white keys")
 
     parsed: dict[int, dict[str, float]] = {}
     for stone_key, pose_value in value.items():
@@ -476,7 +513,7 @@ def _parse_pickup_poses(value: Any) -> dict[int, dict[str, float]] | None:
         stone = _parse_stone(stone_key)
         pose = _parse_optional_robot_pose(
             pose_value,
-            f"robot.pickup_poses.{stone_key}",
+            f"{field_name}.{stone_key}",
         )
         if pose is None:
             continue
