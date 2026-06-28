@@ -17,6 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.game.ai import ai_reset, resolve_rapfi_engine_path  # noqa: E402
 from src.game.board import check_win  # noqa: E402
+from src.game.decision import AIMoveError, AIRefusedMoveError  # noqa: E402
+from src.game.llm_ai import DEFAULT_OPENROUTER_MODEL  # noqa: E402
 from src.interaction import (  # noqa: E402
     ConsoleRobotInteraction,
     KeyboardHumanTurnController,
@@ -160,7 +162,14 @@ def main() -> int:
 
             if orchestrator.is_robot_turn():
                 interaction.speak("轮到我了。")
-                row, col, target = orchestrator.play_robot_turn()
+                try:
+                    row, col, target = orchestrator.play_robot_turn()
+                except AIRefusedMoveError as exc:
+                    print(f"AI chose not to play: {exc}")
+                    return 0
+                except AIMoveError as exc:
+                    print(f"AI move failed before robot motion: {exc}")
+                    return 1
                 print(f"Robot played {stone_name(orchestrator.robot_stone)} at ({row}, {col})")
                 print(f"Robot target: {target}")
                 winner = check_win(orchestrator.board.state, (row, col))
@@ -233,8 +242,11 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", default=None, help="Override robot.port")
     parser.add_argument("--robot-id", default=None, help="Override robot.id")
     parser.add_argument("--robot-stone", choices=("black", "white"), default=None)
+    parser.add_argument("--ai-provider", choices=("rapfi", "openrouter"), default=None)
     parser.add_argument("--engine-path", default=None, help="Override game.ai.engine_path")
     parser.add_argument("--time-per-move-ms", type=int, default=None)
+    parser.add_argument("--llm-model", default=None, help="Override game.ai.openrouter.model")
+    parser.add_argument("--llm-strength", default=None, help="garbage, medium, or strong")
     parser.add_argument("--duration", type=float, default=DEFAULT_LOWLEVEL_DURATION_SECONDS)
     parser.add_argument("--dt", type=float, default=DEFAULT_LOWLEVEL_DT_SECONDS)
     parser.add_argument("--settle", type=float, default=DEFAULT_LOWLEVEL_SETTLE_SECONDS)
@@ -306,10 +318,18 @@ def _apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> No
     if args.robot_stone is not None:
         game_cfg["robot_stone"] = args.robot_stone
         game_cfg["my_stone"] = args.robot_stone
+    if args.ai_provider is not None:
+        ai_cfg["provider"] = args.ai_provider
     if args.engine_path is not None:
         ai_cfg["engine_path"] = args.engine_path
     if args.time_per_move_ms is not None:
         ai_cfg["time_per_move_ms"] = int(args.time_per_move_ms)
+    if args.llm_model is not None:
+        openrouter_cfg = _ensure_mapping(ai_cfg, "openrouter")
+        openrouter_cfg["model"] = args.llm_model
+    if args.llm_strength is not None:
+        openrouter_cfg = _ensure_mapping(ai_cfg, "openrouter")
+        openrouter_cfg["strength"] = args.llm_strength
 
     pump_cfg = _ensure_mapping(robot_cfg, "air_pump")
     pump_cfg["enabled"] = not args.disable_air_pump
@@ -476,6 +496,9 @@ def _write_config(path: Path, config: Mapping[str, Any]) -> None:
 
 
 def _validate_engine_path(config: Mapping[str, Any]) -> None:
+    if _ai_provider_from_config(config) != "rapfi":
+        return
+
     game_cfg = config.get("game", {})
     if not isinstance(game_cfg, Mapping):
         game_cfg = {}
@@ -498,6 +521,16 @@ def _validate_engine_path(config: Mapping[str, Any]) -> None:
         )
     if not engine_path.is_file():
         raise FileNotFoundError(f"Rapfi path is not a file: {engine_path}")
+
+
+def _ai_provider_from_config(config: Mapping[str, Any]) -> str:
+    game_cfg = config.get("game", {})
+    if not isinstance(game_cfg, Mapping):
+        return "rapfi"
+    ai_cfg = game_cfg.get("ai", {})
+    if not isinstance(ai_cfg, Mapping):
+        return "rapfi"
+    return str(ai_cfg.get("provider", "rapfi")).strip().lower()
 
 
 def _validate_robot_mapping(orchestrator: GameOrchestrator, *, dry_run_robot: bool) -> None:
@@ -619,7 +652,11 @@ def _confirm_start(
     game_cfg = config.get("game", {})
     robot_cfg = config.get("robot", {})
     ai_cfg = game_cfg.get("ai", {}) if isinstance(game_cfg, Mapping) else {}
+    openrouter_cfg = ai_cfg.get("openrouter", {}) if isinstance(ai_cfg, Mapping) else {}
+    if not isinstance(openrouter_cfg, Mapping):
+        openrouter_cfg = {}
     robot_stone = game_cfg.get("robot_stone", game_cfg.get("my_stone", "black"))
+    ai_provider = _ai_provider_from_config(config)
     pump_enabled = False
     if isinstance(robot_cfg, Mapping):
         pump_cfg = robot_cfg.get("air_pump", {})
@@ -636,7 +673,13 @@ def _confirm_start(
         "  per_move_confirm: "
         f"{'enabled' if args.confirm_robot_moves and not args.dry_run_robot else 'disabled'}"
     )
-    print(f"  rapfi: {ai_cfg.get('engine_path') or resolve_rapfi_engine_path()}")
+    print(f"  ai_provider: {ai_provider}")
+    if ai_provider == "openrouter":
+        print(f"  openrouter_model: {openrouter_cfg.get('model', DEFAULT_OPENROUTER_MODEL)}")
+        strength = openrouter_cfg.get("strength", game_cfg.get("ai_level", "medium"))
+        print(f"  llm_strength: {strength}")
+    else:
+        print(f"  rapfi: {ai_cfg.get('engine_path') or resolve_rapfi_engine_path()}")
     confirm = input("Press Enter to start, or type q to cancel > ").strip().lower()
     if confirm == "q":
         raise KeyboardInterrupt

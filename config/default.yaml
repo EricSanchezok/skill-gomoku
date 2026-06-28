@@ -108,9 +108,16 @@ game:
     col_offset: 3
   ai_level: basic
   ai:
+    provider: openrouter
     engine_path: null
     board_size: null
     time_per_move_ms: 3000
+    openrouter:
+      key_path: config/key.yaml
+      model: deepseek/deepseek-v4-flash
+      strength: medium
+      timeout_seconds: 20.0
+      temperature: 0.7
 interaction:
   human_done:
     mode: keyboard

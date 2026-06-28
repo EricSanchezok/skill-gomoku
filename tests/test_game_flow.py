@@ -4,7 +4,9 @@ import numpy as np
 import pytest
 
 import src.game.ai as ai_module
+import src.game.llm_ai as llm_ai_module
 import src.orchestrator as orchestrator_module
+from src.game.decision import AIDecision, AIMoveError
 from src.game.play_area import PlayArea, parse_play_area_config
 from src.interaction import (
     HumanTurnCommand,
@@ -12,6 +14,7 @@ from src.interaction import (
     KeyboardHumanTurnController,
 )
 from src.robot.pose_mapper import MeasuredBoardPoseMapper
+from src.utils.config_loader import load_config
 from src.utils.constants import BLACK, BOARD_COLS, BOARD_ROWS, EMPTY, EMPTY_BOARD, WHITE
 
 
@@ -76,6 +79,40 @@ def test_ai_config_derives_board_size_from_play_area(tmp_path) -> None:
 
     assert settings.board_size == 9
     assert settings.engine_path == engine_path
+    assert settings.provider == "rapfi"
+
+
+def test_ai_config_can_select_openrouter(tmp_path) -> None:
+    settings = ai_module.configure_ai_from_config(
+        {
+            "game": {
+                "ai_level": "强力",
+                "play_area": {"rows": 9, "cols": 9, "row_offset": 3, "col_offset": 3},
+                "ai": {
+                    "provider": "openrouter",
+                    "openrouter": {
+                        "key_path": "config/key.yaml",
+                        "model": "openrouter/auto",
+                    },
+                },
+            }
+        },
+        base_dir=tmp_path,
+    )
+
+    assert settings.provider == "openrouter"
+    assert settings.board_size == 9
+    assert settings.openrouter is not None
+    assert settings.openrouter.key_path == tmp_path / "config" / "key.yaml"
+    assert settings.openrouter.strength == "strong"
+
+
+def test_default_live_config_uses_openrouter() -> None:
+    config_path = ai_module.PROJECT_ROOT / "config" / "default.yaml"
+    config = load_config(config_path)
+
+    assert config["game"]["ai"]["provider"] == "openrouter"
+    assert config["game"]["ai"]["openrouter"]["model"] == "deepseek/deepseek-v4-flash"
 
 
 def test_from_config_prefers_robot_stone_and_keeps_my_stone_compatibility() -> None:
@@ -104,7 +141,11 @@ def test_from_config_rejects_conflicting_robot_stone_aliases() -> None:
 
 def test_play_robot_turn_uses_ai_and_places_robot_stone(monkeypatch: pytest.MonkeyPatch) -> None:
     mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
-    monkeypatch.setattr(orchestrator_module, "ai_decide", lambda _board, _stone: (1, 1))
+    monkeypatch.setattr(
+        orchestrator_module,
+        "ai_decide_verbose",
+        lambda _board, _stone: AIDecision(row=1, col=1),
+    )
     orchestrator = orchestrator_module.GameOrchestrator(
         state_extractor=object(),
         pose_mapper=mapper,
@@ -128,9 +169,9 @@ def test_play_robot_turn_crops_center_9x9_for_ai_and_maps_to_global(
     def fake_ai_decide(board, stone):
         calls.append((board.shape, stone))
         assert board.shape == (9, 9)
-        return 4, 4
+        return AIDecision(row=4, col=4)
 
-    monkeypatch.setattr(orchestrator_module, "ai_decide", fake_ai_decide)
+    monkeypatch.setattr(orchestrator_module, "ai_decide_verbose", fake_ai_decide)
     orchestrator = orchestrator_module.GameOrchestrator(
         state_extractor=object(),
         pose_mapper=mapper,
@@ -217,7 +258,7 @@ def test_run_once_skips_ai_when_robot_is_not_next_turn(monkeypatch: pytest.Monke
         def extract(self):
             return EMPTY_BOARD.copy(), None
 
-    monkeypatch.setattr(orchestrator_module, "ai_decide", fail_ai_decide)
+    monkeypatch.setattr(orchestrator_module, "ai_decide_verbose", fail_ai_decide)
     orchestrator = orchestrator_module.GameOrchestrator(
         state_extractor=FakeExtractor(),
         my_stone=WHITE,
@@ -362,6 +403,80 @@ def test_orchestrator_hri_hooks_forward_to_interaction_controller() -> None:
         ("dance", "win"),
         ("skill", {"phase": "opening"}),
     ]
+
+
+def test_play_robot_turn_forwards_llm_talk_and_skill(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[tuple[str, object]] = []
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+
+    class FakeInteraction:
+        def speak(self, text: str) -> None:
+            events.append(("speak", text))
+
+        def dance(self, name: str = "default") -> None:
+            events.append(("dance", name))
+
+        def use_skill_gomoku(self, context=None) -> None:
+            events.append(("skill", context))
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "ai_decide_verbose",
+        lambda _board, _stone: AIDecision(
+            row=1,
+            col=1,
+            use_skill=True,
+            trash_talk="这手棋很有节目效果。",
+            rationale="center pressure",
+            source="openrouter",
+        ),
+    )
+    orchestrator = orchestrator_module.GameOrchestrator(
+        state_extractor=object(),
+        pose_mapper=mapper,
+        interaction_controller=FakeInteraction(),
+        my_stone=BLACK,
+    )
+
+    orchestrator.play_robot_turn()
+
+    assert events == [
+        ("speak", "这手棋很有节目效果。"),
+        (
+            "skill",
+            {
+                "source": "openrouter",
+                "row": 1,
+                "col": 1,
+                "rationale": "center pressure",
+            },
+        ),
+    ]
+
+
+def test_openrouter_decision_parses_one_based_legal_move() -> None:
+    board = np.zeros((9, 9), dtype=np.int8)
+    board[4, 4] = BLACK
+
+    decision = llm_ai_module._parse_decision(
+        '{"should_play": true, "row": 5, "col": 6, '
+        '"use_skill": true, "trash_talk": "你这棋盘归我了"}',
+        board,
+    )
+
+    assert decision.row == 4
+    assert decision.col == 5
+    assert decision.use_skill is True
+    assert decision.trash_talk == "你这棋盘归我了"
+    assert decision.source == "openrouter"
+
+
+def test_openrouter_decision_rejects_occupied_move() -> None:
+    board = np.zeros((9, 9), dtype=np.int8)
+    board[4, 4] = BLACK
+
+    with pytest.raises(AIMoveError):
+        llm_ai_module._parse_decision('{"should_play": true, "row": 5, "col": 5}', board)
 
 
 def test_ai_decide_uses_begin_move_for_empty_black_opening(

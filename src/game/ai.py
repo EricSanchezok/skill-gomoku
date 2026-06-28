@@ -17,6 +17,12 @@ from typing import Any
 
 import numpy as np
 
+from src.game.decision import AIDecision
+from src.game.llm_ai import (
+    OpenRouterSettings,
+    decide_with_openrouter,
+    openrouter_settings_from_config,
+)
 from src.game.play_area import parse_play_area_config
 from src.utils.constants import BLACK, BOARD_ROWS, EMPTY
 
@@ -38,11 +44,13 @@ _MOVE_RE = re.compile(r"^(-?\d+),(-?\d+)$")
 
 @dataclass(frozen=True)
 class AIEngineSettings:
-    """Runtime settings for the Rapfi engine singleton."""
+    """Runtime settings for the process-wide AI move selector."""
 
     engine_path: Path
+    provider: str = "rapfi"
     time_per_move_ms: int = DEFAULT_TIME_PER_MOVE_MS
     board_size: int = BOARD_ROWS
+    openrouter: OpenRouterSettings | None = None
 
 
 _settings: AIEngineSettings | None = None
@@ -241,6 +249,19 @@ def _get_engine(time_per_move_ms: int | None = None) -> RapfiEngine:
 # ------------------------------------------------------------------
 
 
+def ai_decide_verbose(board: np.ndarray, my_stone: int) -> AIDecision:
+    """给定棋局状态，返回 AI 的完整决策。"""
+
+    settings = _active_settings()
+    if settings.provider == "openrouter":
+        if settings.openrouter is None:
+            raise RuntimeError("OpenRouter AI is selected but not configured")
+        return decide_with_openrouter(board, my_stone, settings.openrouter)
+
+    row, col = _rapfi_decide(board, my_stone)
+    return AIDecision(row=row, col=col, source="rapfi")
+
+
 def ai_decide(board: np.ndarray, my_stone: int) -> tuple[int, int]:
     """给定棋局状态，返回 AI 的最佳落子位置。
 
@@ -251,6 +272,11 @@ def ai_decide(board: np.ndarray, my_stone: int) -> tuple[int, int]:
     Returns:
         (row, col) 落子位置。
     """
+    decision = ai_decide_verbose(board, my_stone)
+    return decision.row, decision.col
+
+
+def _rapfi_decide(board: np.ndarray, my_stone: int) -> tuple[int, int]:
     engine = _get_engine()
     try:
         return engine.set_board(board, my_stone)
@@ -268,24 +294,34 @@ def ai_decide(board: np.ndarray, my_stone: int) -> tuple[int, int]:
 
 def configure_ai(
     *,
+    provider: str = "rapfi",
     engine_path: str | Path | None = None,
     time_per_move_ms: int = DEFAULT_TIME_PER_MOVE_MS,
     board_size: int = BOARD_ROWS,
+    openrouter: OpenRouterSettings | None = None,
 ) -> AIEngineSettings:
-    """Configure the process-wide Rapfi singleton.
+    """Configure the process-wide AI selector.
 
     The existing engine process is stopped whenever settings change so the next
-    call to :func:`ai_decide` starts Rapfi with the requested binary.
+    Rapfi call starts with the requested binary.
     """
 
     global _settings
-    resolved_engine_path = (
-        resolve_rapfi_engine_path() if engine_path is None else Path(engine_path).expanduser()
-    )
+    normalized_provider = str(provider).strip().lower()
+    if normalized_provider not in {"rapfi", "openrouter"}:
+        raise ValueError(f"Unknown game.ai.provider: {provider!r}")
+    if engine_path is None and normalized_provider == "openrouter":
+        resolved_engine_path = Path("")
+    else:
+        resolved_engine_path = (
+            resolve_rapfi_engine_path() if engine_path is None else Path(engine_path).expanduser()
+        )
     new_settings = AIEngineSettings(
         engine_path=resolved_engine_path,
+        provider=normalized_provider,
         time_per_move_ms=int(time_per_move_ms),
         board_size=int(board_size),
+        openrouter=openrouter,
     )
     if new_settings != _settings:
         ai_reset()
@@ -297,7 +333,7 @@ def configure_ai_from_config(
     config: Mapping[str, Any],
     base_dir: str | Path = PROJECT_ROOT,
 ) -> AIEngineSettings:
-    """Configure Rapfi from ``game.ai`` settings in the YAML config."""
+    """Configure AI settings from ``game.ai`` in the YAML config."""
 
     game_cfg = config.get("game", {})
     if not isinstance(game_cfg, Mapping):
@@ -306,12 +342,16 @@ def configure_ai_from_config(
     if not isinstance(ai_cfg, Mapping):
         ai_cfg = {}
 
+    provider = str(ai_cfg.get("provider", "rapfi")).strip().lower()
     path_value = ai_cfg.get("engine_path", ai_cfg.get("rapfi_path"))
-    engine_path = (
-        resolve_rapfi_engine_path()
-        if path_value in (None, "")
-        else _resolve_config_path(path_value, base_dir=base_dir)
-    )
+    if provider == "openrouter" and path_value in (None, ""):
+        engine_path = Path("")
+    else:
+        engine_path = (
+            resolve_rapfi_engine_path()
+            if path_value in (None, "")
+            else _resolve_config_path(path_value, base_dir=base_dir)
+        )
     time_per_move_ms = int(ai_cfg.get("time_per_move_ms", DEFAULT_TIME_PER_MOVE_MS))
     board_size_value = ai_cfg.get("board_size")
     if board_size_value in (None, ""):
@@ -323,10 +363,17 @@ def configure_ai_from_config(
         board_size = play_area.rows
     else:
         board_size = int(board_size_value)
+    openrouter_settings = (
+        openrouter_settings_from_config(game_cfg, ai_cfg, base_dir=base_dir)
+        if provider == "openrouter"
+        else None
+    )
     return configure_ai(
+        provider=provider,
         engine_path=engine_path,
         time_per_move_ms=time_per_move_ms,
         board_size=board_size,
+        openrouter=openrouter_settings,
     )
 
 

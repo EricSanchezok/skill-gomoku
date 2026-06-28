@@ -8,8 +8,9 @@ from typing import Any
 
 import numpy as np
 
-from src.game.ai import PROJECT_ROOT, ai_decide, ai_reset, configure_ai_from_config
+from src.game.ai import PROJECT_ROOT, ai_decide_verbose, ai_reset, configure_ai_from_config
 from src.game.board import Board, check_win
+from src.game.decision import AIDecision, AIRefusedMoveError
 from src.game.play_area import PlayArea, parse_play_area_config
 from src.interaction import (
     HumanTurnCommand,
@@ -267,7 +268,11 @@ class GameOrchestrator:
                 f"Robot plays {stone_name(self.robot_stone)}, but next turn is "
                 f"{stone_name(self.next_turn_stone())}"
             )
-        local_row, local_col = ai_decide(self.play_area.crop(self.board.state), self.robot_stone)
+        decision = ai_decide_verbose(self.play_area.crop(self.board.state), self.robot_stone)
+        self._handle_ai_decision(decision)
+        if not decision.should_play:
+            raise AIRefusedMoveError("AI chose not to play")
+        local_row, local_col = decision.row, decision.col
         row, col = self.play_area.to_global(local_row, local_col)
         target = self.execute_my_move(row, col)
         return row, col, target
@@ -407,7 +412,11 @@ class GameOrchestrator:
             )
             return EMPTY
 
-        local_row, local_col = ai_decide(self.play_area.crop(self.board.state), self.robot_stone)
+        decision = ai_decide_verbose(self.play_area.crop(self.board.state), self.robot_stone)
+        self._handle_ai_decision(decision)
+        if not decision.should_play:
+            raise AIRefusedMoveError("AI chose not to play")
+        local_row, local_col = decision.row, decision.col
         row, col = self.play_area.to_global(local_row, local_col)
         target = self._target_for_cell(row, col)
         logger.info(f"AI decides: ({row}, {col}), robot target: {target}")
@@ -438,6 +447,19 @@ class GameOrchestrator:
         if self.robot_mover is None or self.waiting_pose is None:
             return None
         return self.robot_mover.move_to(self.waiting_pose)
+
+    def _handle_ai_decision(self, decision: AIDecision) -> None:
+        if decision.trash_talk:
+            self.robot_say(decision.trash_talk)
+        if decision.use_skill:
+            self.robot_use_skill_gomoku(
+                {
+                    "source": decision.source,
+                    "row": decision.row,
+                    "col": decision.col,
+                    "rationale": decision.rationale,
+                }
+            )
 
     def _pickup_pose_for_robot_stone(self) -> dict[str, float] | None:
         """Return the pickup pose for the robot's configured stone colour."""
