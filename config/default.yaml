@@ -116,8 +116,11 @@ game:
       key_path: config/key.yaml
       model: deepseek/deepseek-v4-flash
       strength: medium
-      timeout_seconds: 20.0
+      timeout_seconds: 45.0
       temperature: 0.7
+      max_tokens: 800
+      max_retries: 2
+      retry_delay_seconds: 0.5
 interaction:
   human_done:
     mode: keyboard

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import time
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -21,6 +23,8 @@ from src.utils.constants import BLACK, EMPTY, WHITE
 DEFAULT_OPENROUTER_ENDPOINT = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_OPENROUTER_MODEL = "deepseek/deepseek-v4-flash"
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class OpenRouterSettings:
@@ -30,9 +34,11 @@ class OpenRouterSettings:
     model: str = DEFAULT_OPENROUTER_MODEL
     strength: str = "medium"
     endpoint: str = DEFAULT_OPENROUTER_ENDPOINT
-    timeout_seconds: float = 20.0
+    timeout_seconds: float = 45.0
     temperature: float = 0.7
-    max_tokens: int = 300
+    max_tokens: int = 800
+    max_retries: int = 2
+    retry_delay_seconds: float = 0.5
     api_key: str | None = None
 
 
@@ -47,33 +53,46 @@ def decide_with_openrouter(
         raise ValueError(f"LLM board must be square, got shape {board.shape}")
 
     api_key = settings.api_key or load_openrouter_api_key(settings.key_path)
-    payload = {
-        "model": settings.model,
-        "messages": _messages(board, my_stone, settings.strength),
-        "temperature": settings.temperature,
-        "max_tokens": settings.max_tokens,
-    }
-    body = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(
-        settings.endpoint,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=settings.timeout_seconds) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise AIMoveError(f"OpenRouter request failed: HTTP {exc.code}: {detail}") from exc
-    except urllib.error.URLError as exc:
-        raise AIMoveError(f"OpenRouter request failed: {exc}") from exc
+    attempts = max(1, int(settings.max_retries) + 1)
+    payload = _chat_payload(board, my_stone, settings)
+    last_error: Exception | None = None
 
-    content = _message_content(data)
-    return _parse_decision(content, board)
+    for attempt in range(1, attempts + 1):
+        logger.info(
+            "OpenRouter move request %d/%d: model=%s board=%s stones black=%d white=%d",
+            attempt,
+            attempts,
+            settings.model,
+            f"{board.shape[0]}x{board.shape[1]}",
+            int(np.count_nonzero(board == BLACK)),
+            int(np.count_nonzero(board == WHITE)),
+        )
+        try:
+            data = _request_chat_completion(payload, api_key=api_key, settings=settings)
+            decision = _parse_decision(_message_content(data), board)
+            logger.info(
+                "OpenRouter move response %d/%d: local_1based=(%d,%d) skill=%s talk=%s",
+                attempt,
+                attempts,
+                decision.row + 1,
+                decision.col + 1,
+                decision.use_skill,
+                bool(decision.trash_talk),
+            )
+            return decision
+        except (AIMoveError, ValueError, TimeoutError) as exc:
+            last_error = exc
+            logger.warning(
+                "OpenRouter move attempt %d/%d failed: %s: %s",
+                attempt,
+                attempts,
+                type(exc).__name__,
+                exc,
+            )
+            if attempt < attempts:
+                time.sleep(max(0.0, float(settings.retry_delay_seconds)))
+
+    raise AIMoveError(f"OpenRouter failed after {attempts} attempts: {last_error}") from last_error
 
 
 def openrouter_settings_from_config(
@@ -106,11 +125,58 @@ def openrouter_settings_from_config(
             openrouter_cfg.get("endpoint", ai_cfg.get("endpoint", DEFAULT_OPENROUTER_ENDPOINT))
         ),
         timeout_seconds=float(
-            openrouter_cfg.get("timeout_seconds", ai_cfg.get("timeout_seconds", 20.0))
+            openrouter_cfg.get("timeout_seconds", ai_cfg.get("timeout_seconds", 45.0))
         ),
         temperature=float(openrouter_cfg.get("temperature", ai_cfg.get("temperature", 0.7))),
-        max_tokens=int(openrouter_cfg.get("max_tokens", ai_cfg.get("max_tokens", 300))),
+        max_tokens=int(openrouter_cfg.get("max_tokens", ai_cfg.get("max_tokens", 800))),
+        max_retries=int(openrouter_cfg.get("max_retries", ai_cfg.get("max_retries", 2))),
+        retry_delay_seconds=float(
+            openrouter_cfg.get("retry_delay_seconds", ai_cfg.get("retry_delay_seconds", 0.5))
+        ),
     )
+
+
+def _chat_payload(
+    board: np.ndarray,
+    my_stone: int,
+    settings: OpenRouterSettings,
+) -> dict[str, Any]:
+    return {
+        "model": settings.model,
+        "messages": _messages(board, my_stone, settings.strength),
+        "temperature": settings.temperature,
+        "max_tokens": settings.max_tokens,
+    }
+
+
+def _request_chat_completion(
+    payload: Mapping[str, Any],
+    *,
+    api_key: str,
+    settings: OpenRouterSettings,
+) -> Mapping[str, Any]:
+    body = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        settings.endpoint,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=settings.timeout_seconds) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise AIMoveError(f"OpenRouter request failed: HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise AIMoveError(f"OpenRouter request failed: {exc}") from exc
+
+    if not isinstance(data, Mapping):
+        raise AIMoveError(f"OpenRouter response is not a JSON object: {data!r}")
+    return data
 
 
 def load_openrouter_api_key(path: str | Path) -> str:
@@ -250,7 +316,8 @@ def _message_content(data: Mapping[str, Any]) -> str:
     choices = data.get("choices")
     if not isinstance(choices, list) or not choices:
         raise AIMoveError(f"OpenRouter response missing choices: {data!r}")
-    message = choices[0].get("message") if isinstance(choices[0], Mapping) else None
+    choice = choices[0]
+    message = choice.get("message") if isinstance(choice, Mapping) else None
     if not isinstance(message, Mapping):
         raise AIMoveError(f"OpenRouter response missing message: {data!r}")
     content = message.get("content", "")
@@ -264,7 +331,11 @@ def _message_content(data: Mapping[str, Any]) -> str:
                 if isinstance(text, str):
                     parts.append(text)
         return "".join(parts)
-    raise AIMoveError(f"OpenRouter response content is not text: {content!r}")
+    finish_reason = choice.get("finish_reason") if isinstance(choice, Mapping) else None
+    raise AIMoveError(
+        "OpenRouter response content is not text: "
+        f"{content!r}; finish_reason={finish_reason!r}; message_keys={sorted(message)}"
+    )
 
 
 def _board_text(board: np.ndarray) -> str:

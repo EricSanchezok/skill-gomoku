@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+from pathlib import Path
+
 import numpy as np
 import pytest
 
@@ -94,6 +97,8 @@ def test_ai_config_can_select_openrouter(tmp_path) -> None:
                     "openrouter": {
                         "key_path": "config/key.yaml",
                         "model": "openrouter/auto",
+                        "max_retries": 4,
+                        "retry_delay_seconds": 0.25,
                     },
                 },
             }
@@ -106,6 +111,8 @@ def test_ai_config_can_select_openrouter(tmp_path) -> None:
     assert settings.openrouter is not None
     assert settings.openrouter.key_path == tmp_path / "config" / "key.yaml"
     assert settings.openrouter.strength == "strong"
+    assert settings.openrouter.max_retries == 4
+    assert settings.openrouter.retry_delay_seconds == 0.25
 
 
 def test_default_live_config_uses_openrouter() -> None:
@@ -114,6 +121,9 @@ def test_default_live_config_uses_openrouter() -> None:
 
     assert config["game"]["ai"]["provider"] == "openrouter"
     assert config["game"]["ai"]["openrouter"]["model"] == "deepseek/deepseek-v4-flash"
+    assert config["game"]["ai"]["openrouter"]["timeout_seconds"] == 45.0
+    assert config["game"]["ai"]["openrouter"]["max_tokens"] == 800
+    assert config["game"]["ai"]["openrouter"]["max_retries"] == 2
 
 
 def test_board_repr_shows_row_and_column_indexes() -> None:
@@ -504,6 +514,56 @@ def test_openrouter_decision_rejects_occupied_move() -> None:
 
     with pytest.raises(AIMoveError):
         llm_ai_module._parse_decision('{"should_play": true, "row": 5, "col": 5}', board)
+
+
+def test_openrouter_retries_when_response_content_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    board = np.zeros((9, 9), dtype=np.int8)
+    responses = iter(
+        [
+            {"choices": [{"message": {"content": None}, "finish_reason": "length"}]},
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"should_play": true, "row": 5, "col": 5, '
+                                '"use_skill": false, "trash_talk": ""}'
+                            )
+                        },
+                        "finish_reason": "stop",
+                    }
+                ]
+            },
+        ]
+    )
+    calls = []
+
+    def fake_request(payload, *, api_key, settings):
+        calls.append((payload["model"], api_key, settings.max_retries))
+        return next(responses)
+
+    monkeypatch.setattr(llm_ai_module, "_request_chat_completion", fake_request)
+    caplog.set_level(logging.INFO, logger="src.game.llm_ai")
+
+    decision = llm_ai_module.decide_with_openrouter(
+        board,
+        BLACK,
+        llm_ai_module.OpenRouterSettings(
+            key_path=Path("unused"),
+            api_key="test-key",
+            max_retries=1,
+            retry_delay_seconds=0,
+        ),
+    )
+
+    assert decision.row == 4
+    assert decision.col == 4
+    assert len(calls) == 2
+    assert "OpenRouter move request 1/2" in caplog.text
+    assert "OpenRouter move attempt 1/2 failed" in caplog.text
 
 
 def test_ai_decide_uses_begin_move_for_empty_black_opening(
