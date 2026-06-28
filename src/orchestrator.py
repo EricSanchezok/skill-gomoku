@@ -324,7 +324,9 @@ class GameOrchestrator:
         for _ in range(max_attempts):
             time.sleep(poll_interval_seconds)
             try:
-                new_matrix, delta = self.extractor.extract()
+                new_matrix, _extractor_delta = self.extractor.extract()
+                filtered_matrix = self.play_area.filter_board_state(new_matrix)
+                delta = _find_added_stone(self.board.state, filtered_matrix)
                 if delta is not None:
                     r, c, stone = delta
                     if r is None or c is None:
@@ -338,6 +340,7 @@ class GameOrchestrator:
                         continue
                     if stone == self.human_stone:
                         self.board.place(r, c, stone)
+                        self.move_count = sum(_stone_counts(self.board.state))
                         return self.board
             except Exception as e:
                 logger.warning(f"Wait for opponent failed: {e}")
@@ -547,3 +550,15 @@ def _stone_counts(board_matrix: np.ndarray) -> tuple[int, int]:
         int(np.count_nonzero(board_matrix == BLACK)),
         int(np.count_nonzero(board_matrix == WHITE)),
     )
+
+
+def _find_added_stone(
+    previous: np.ndarray,
+    current: np.ndarray,
+) -> tuple[int, int, int] | None:
+    added_rows, added_cols = np.where((previous == EMPTY) & (current != EMPTY))
+    if added_rows.size != 1:
+        return None
+    row = int(added_rows[0])
+    col = int(added_cols[0])
+    return row, col, int(current[row, col])

@@ -178,7 +178,7 @@ def main() -> int:
                 )
                 if board is None:
                     print("Human turn ended without a detected move.")
-                    break
+                    return 0
                 print("Human move detected.")
                 winner = check_win(orchestrator.board.state)
 

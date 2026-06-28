@@ -256,6 +256,33 @@ def test_wait_for_opponent_confirms_before_perception() -> None:
     assert events == [("confirm", BLACK), ("extract",)]
 
 
+def test_wait_for_opponent_detects_human_move_against_internal_board() -> None:
+    board_after_human = EMPTY_BOARD.copy()
+    board_after_human[7, 7] = BLACK
+    board_after_human[7, 8] = WHITE
+
+    class FakeExtractor:
+        def extract(self):
+            return board_after_human.copy(), None
+
+    orchestrator = orchestrator_module.GameOrchestrator(
+        state_extractor=FakeExtractor(),
+        my_stone=BLACK,
+    )
+    orchestrator.board.place(7, 7, BLACK)
+    orchestrator.move_count = 1
+
+    board = orchestrator.wait_for_opponent(
+        confirm_human=False,
+        max_attempts=1,
+        poll_interval_seconds=0,
+    )
+
+    assert board is orchestrator.board
+    assert orchestrator.board.get(7, 7) == BLACK
+    assert orchestrator.board.get(7, 8) == WHITE
+
+
 def test_wait_for_opponent_quit_returns_without_perception() -> None:
     class FakeHumanTurnController:
         def wait_for_move_done(self, *, expected_stone, board_state=None):
