@@ -21,6 +21,8 @@ class AIDecision:
     col: int
     should_play: bool = True
     use_skill: bool = False
+    skill_row: int | None = None
+    skill_col: int | None = None
     trash_talk: str = ""
     rationale: str = ""
     source: str = "rapfi"

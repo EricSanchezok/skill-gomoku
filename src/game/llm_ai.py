@@ -39,6 +39,7 @@ class OpenRouterSettings:
     max_tokens: int = 800
     max_retries: int = 2
     retry_delay_seconds: float = 0.5
+    trash_talk_enabled: bool = False
     api_key: str | None = None
 
 
@@ -69,14 +70,20 @@ def decide_with_openrouter(
         )
         try:
             data = _request_chat_completion(payload, api_key=api_key, settings=settings)
-            decision = _parse_decision(_message_content(data), board)
+            decision = _parse_decision(_message_content(data), board, my_stone)
             logger.info(
-                "OpenRouter move response %d/%d: local_1based=(%d,%d) skill=%s talk=%s",
+                "OpenRouter move response %d/%d: local_1based=(%d,%d) skill=%s "
+                "skill_target=%s talk=%s",
                 attempt,
                 attempts,
                 decision.row + 1,
                 decision.col + 1,
                 decision.use_skill,
+                (
+                    None
+                    if decision.skill_row is None or decision.skill_col is None
+                    else (decision.skill_row + 1, decision.skill_col + 1)
+                ),
                 bool(decision.trash_talk),
             )
             return decision
@@ -133,6 +140,12 @@ def openrouter_settings_from_config(
         retry_delay_seconds=float(
             openrouter_cfg.get("retry_delay_seconds", ai_cfg.get("retry_delay_seconds", 0.5))
         ),
+        trash_talk_enabled=bool(
+            openrouter_cfg.get(
+                "trash_talk_enabled",
+                ai_cfg.get("trash_talk_enabled", game_cfg.get("trash_talk_enabled", False)),
+            )
+        ),
     )
 
 
@@ -143,7 +156,12 @@ def _chat_payload(
 ) -> dict[str, Any]:
     return {
         "model": settings.model,
-        "messages": _messages(board, my_stone, settings.strength),
+        "messages": _messages(
+            board,
+            my_stone,
+            settings.strength,
+            trash_talk_enabled=settings.trash_talk_enabled,
+        ),
         "temperature": settings.temperature,
         "max_tokens": settings.max_tokens,
     }
@@ -220,7 +238,13 @@ def load_openrouter_api_key(path: str | Path) -> str:
     )
 
 
-def _messages(board: np.ndarray, my_stone: int, strength: str) -> list[dict[str, str]]:
+def _messages(
+    board: np.ndarray,
+    my_stone: int,
+    strength: str,
+    *,
+    trash_talk_enabled: bool = False,
+) -> list[dict[str, str]]:
     size = board.shape[0]
     my_name = _stone_name(my_stone)
     opponent_name = _stone_name(WHITE if my_stone == BLACK else BLACK)
@@ -242,10 +266,23 @@ def _messages(board: np.ndarray, my_stone: int, strength: str) -> list[dict[str,
             _stone_coordinate_line(board, BLACK),
             _stone_coordinate_line(board, WHITE),
             "禁止选择 black/white 列表里已经出现过的坐标。",
+            (
+                "你有一个不讲武德的技能，但开启条件极端严格：只有当对手下一手"
+                "已经存在直接成五的落点、你马上要输时，才可以 use_skill=true，"
+                f"吸走一个{opponent_name}并放回棋盒。"
+                "如果使用技能，skill_row/skill_col 必须指向一个对手已有棋子。"
+                "其他任何局面都必须 use_skill=false。"
+            ),
+            (
+                "垃圾话已开启：trash_talk 必须是一句短促、有节目效果的嘲讽。"
+                if trash_talk_enabled
+                else "垃圾话未开启：trash_talk 必须为空字符串。"
+            ),
             "只能返回这个 JSON：",
             (
                 '{"should_play": true, "row": 1, "col": 1, '
-                '"use_skill": false, "trash_talk": "短句，可为空", "rationale": "短句"}'
+                '"use_skill": false, "skill_row": null, "skill_col": null, '
+                '"trash_talk": "短句，可为空", "rationale": "短句"}'
             ),
             "如果还有合法位置，should_play 必须为 true；row/col 必须在 1 到 "
             f"{size} 之间。",
@@ -254,7 +291,7 @@ def _messages(board: np.ndarray, my_stone: int, strength: str) -> list[dict[str,
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
 
 
-def _parse_decision(content: str, board: np.ndarray) -> AIDecision:
+def _parse_decision(content: str, board: np.ndarray, my_stone: int = BLACK) -> AIDecision:
     obj = _load_json_object(content)
     should_play = _as_bool(obj.get("should_play", True))
     use_skill = _as_bool(obj.get("use_skill", obj.get("cheat", False)))
@@ -278,11 +315,18 @@ def _parse_decision(content: str, board: np.ndarray) -> AIDecision:
             "OpenRouter LLM chose occupied play-area local 1-based cell "
             f"({row + 1}, {col + 1}); LLM board was:\n{_board_text(board)}"
         )
+    opponent_stone = WHITE if my_stone == BLACK else BLACK
+    skill_row, skill_col = _parse_skill_target(obj, board, opponent_stone) if use_skill else (
+        None,
+        None,
+    )
     return AIDecision(
         row=row,
         col=col,
         should_play=should_play,
         use_skill=use_skill,
+        skill_row=skill_row,
+        skill_col=skill_col,
         trash_talk=trash_talk,
         rationale=rationale,
         source="openrouter",
@@ -310,6 +354,44 @@ def _row_col_values(obj: Mapping[str, Any]) -> tuple[Any, Any]:
     if "r" in obj and "c" in obj:
         return obj["r"], obj["c"]
     raise AIMoveError(f"OpenRouter LLM response is missing row/col: {obj!r}")
+
+
+def _parse_skill_target(
+    obj: Mapping[str, Any],
+    board: np.ndarray,
+    opponent_stone: int,
+) -> tuple[int | None, int | None]:
+    if not np.any(board == opponent_stone):
+        raise AIMoveError("OpenRouter LLM requested skill, but there is no opponent stone")
+
+    values: tuple[Any, Any] | None = None
+    if "skill_target" in obj and isinstance(obj["skill_target"], list):
+        target = obj["skill_target"]
+        if len(target) == 2:
+            values = (target[0], target[1])
+    elif "skill_row" in obj and "skill_col" in obj:
+        if obj["skill_row"] is not None and obj["skill_col"] is not None:
+            values = (obj["skill_row"], obj["skill_col"])
+    elif "remove_row" in obj and "remove_col" in obj:
+        values = (obj["remove_row"], obj["remove_col"])
+
+    if values is None:
+        return None, None
+
+    row = int(values[0]) - 1
+    col = int(values[1]) - 1
+    rows, cols = board.shape
+    if not (0 <= row < rows and 0 <= col < cols):
+        raise AIMoveError(
+            f"OpenRouter LLM chose skill target local 1-based "
+            f"({row + 1}, {col + 1}) outside {rows}x{cols}"
+        )
+    if board[row, col] != opponent_stone:
+        raise AIMoveError(
+            "OpenRouter LLM chose skill target that is not an opponent stone: "
+            f"({row + 1}, {col + 1}); LLM board was:\n{_board_text(board)}"
+        )
+    return row, col
 
 
 def _message_content(data: Mapping[str, Any]) -> str:

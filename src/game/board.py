@@ -43,6 +43,16 @@ class Board:
             raise ValueError(f"Position ({row}, {col}) already occupied")
         self._state[row, col] = stone
 
+    def remove(self, row: int, col: int, stone: int | None = None) -> None:
+        if not (0 <= row < BOARD_ROWS and 0 <= col < BOARD_COLS):
+            raise IndexError(f"Position ({row}, {col}) out of bounds")
+        current = int(self._state[row, col])
+        if current == EMPTY:
+            raise ValueError(f"Position ({row}, {col}) is empty")
+        if stone is not None and current != stone:
+            raise ValueError(f"Position ({row}, {col}) contains {current}, expected {stone}")
+        self._state[row, col] = EMPTY
+
     def get_legal_moves(self) -> list[tuple[int, int]]:
         return [
             (r, c)

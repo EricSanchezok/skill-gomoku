@@ -38,7 +38,7 @@ from src.robot.so101_mover import (
     interpolate_action,
     smoothstep,
 )
-from src.utils.constants import WHITE
+from src.utils.constants import BLACK, EMPTY, WHITE
 
 
 def _measured_pose_data(size: int = 3) -> dict:
@@ -427,6 +427,57 @@ def test_orchestrator_uses_pickup_top_and_waiting_between_pick_and_place() -> No
         ("drop",),
         ("move", waiting_pose),
     ]
+
+
+def test_remove_stone_skill_routes_board_and_box_through_waiting() -> None:
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+    events = []
+    white_pickup = {"joint.pos": -20.0, "gripper.pos": 2.0}
+    white_top = {"joint.pos": -18.0, "gripper.pos": 2.0}
+    waiting_pose = {"joint.pos": -5.0, "gripper.pos": 1.0}
+
+    class FakeMover:
+        def move_to(self, target_pose):
+            events.append(("move", dict(target_pose)))
+            return dict(target_pose)
+
+    class FakeSuction:
+        def pick_stone(self) -> None:
+            events.append(("pick",))
+
+        def drop_stone(self) -> None:
+            events.append(("drop",))
+
+        def off(self) -> None:
+            events.append(("off",))
+
+    orchestrator = GameOrchestrator(
+        state_extractor=object(),
+        pose_mapper=mapper,
+        robot_mover=FakeMover(),
+        suction_controller=FakeSuction(),
+        pickup_poses={WHITE: white_pickup},
+        pickup_top_poses={WHITE: white_top},
+        waiting_pose=waiting_pose,
+        my_stone=BLACK,
+    )
+    orchestrator.board.place(0, 0, WHITE)
+
+    orchestrator._execute_remove_opponent_stone_skill(0, 0)
+
+    assert events == [
+        ("move", waiting_pose),
+        ("move", {"joint.pos": 0.0, "gripper.pos": 0}),
+        ("pick",),
+        ("move", waiting_pose),
+        ("move", white_top),
+        ("move", white_pickup),
+        ("drop",),
+        ("move", white_top),
+        ("move", waiting_pose),
+    ]
+    assert orchestrator.board.get(0, 0) == EMPTY
+    assert orchestrator.next_turn_stone() == BLACK
 
 
 def test_orchestrator_requires_waiting_pose_before_board_target() -> None:

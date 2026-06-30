@@ -107,6 +107,7 @@ game:
     row_offset: 3
     col_offset: 3
   ai_level: basic
+  trash_talk_enabled: false
   ai:
     provider: openrouter
     engine_path: null

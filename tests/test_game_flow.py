@@ -13,6 +13,7 @@ from src.game.board import Board
 from src.game.decision import AIDecision, AIMoveError
 from src.game.play_area import PlayArea, parse_play_area_config
 from src.interaction import (
+    ConsoleRobotInteraction,
     HumanTurnCommand,
     HumanTurnResult,
     KeyboardControlKeys,
@@ -100,6 +101,7 @@ def test_ai_config_can_select_openrouter(tmp_path) -> None:
                         "model": "openrouter/auto",
                         "max_retries": 4,
                         "retry_delay_seconds": 0.25,
+                        "trash_talk_enabled": True,
                     },
                 },
             }
@@ -114,6 +116,7 @@ def test_ai_config_can_select_openrouter(tmp_path) -> None:
     assert settings.openrouter.strength == "strong"
     assert settings.openrouter.max_retries == 4
     assert settings.openrouter.retry_delay_seconds == 0.25
+    assert settings.openrouter.trash_talk_enabled is True
 
 
 def test_default_live_config_uses_openrouter() -> None:
@@ -125,6 +128,7 @@ def test_default_live_config_uses_openrouter() -> None:
     assert config["game"]["ai"]["openrouter"]["timeout_seconds"] == 45.0
     assert config["game"]["ai"]["openrouter"]["max_tokens"] == 800
     assert config["game"]["ai"]["openrouter"]["max_retries"] == 2
+    assert config["game"]["trash_talk_enabled"] is False
 
 
 def test_board_repr_shows_row_and_column_indexes() -> None:
@@ -415,7 +419,9 @@ def test_keyboard_human_turn_controller_ignores_stale_empty_enter() -> None:
     assert messages == ["忽略过早的 Enter，防止上一轮输入残留。请下完棋后再确认。"]
 
 
-def test_orchestrator_hri_hooks_forward_to_interaction_controller() -> None:
+def test_orchestrator_hri_hooks_forward_to_interaction_controller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     events: list[tuple[str, object]] = []
 
     class FakeInteraction:
@@ -428,6 +434,11 @@ def test_orchestrator_hri_hooks_forward_to_interaction_controller() -> None:
         def use_skill_gomoku(self, context=None) -> None:
             events.append(("skill", context))
 
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_play_audio_file",
+        lambda path, wait=False: events.append(("audio", path.name, wait)),
+    )
     orchestrator = orchestrator_module.GameOrchestrator(
         state_extractor=object(),
         interaction_controller=FakeInteraction(),
@@ -440,11 +451,32 @@ def test_orchestrator_hri_hooks_forward_to_interaction_controller() -> None:
     assert events == [
         ("speak", "轮到我了"),
         ("dance", "win"),
+        ("audio", "1.mp3", True),
+        ("speak", "不装了，我要开挂了。"),
         ("skill", {"phase": "opening"}),
     ]
 
 
-def test_play_robot_turn_forwards_llm_talk_and_skill(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_console_robot_interaction_speaks_with_system_voice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events = []
+    monkeypatch.setattr(
+        "src.interaction._speak_system_voice",
+        lambda text: events.append(("voice", text)),
+    )
+    interaction = ConsoleRobotInteraction(
+        print_fn=lambda message: events.append(("print", message))
+    )
+
+    interaction.speak("落子")
+
+    assert events == [("print", "[robot:speak] 落子"), ("voice", "落子")]
+
+
+def test_play_robot_turn_uses_skill_only_for_immediate_loss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     events: list[tuple[str, object]] = []
     mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
 
@@ -465,10 +497,17 @@ def test_play_robot_turn_forwards_llm_talk_and_skill(monkeypatch: pytest.MonkeyP
             row=1,
             col=1,
             use_skill=True,
+            skill_row=0,
+            skill_col=0,
             trash_talk="这手棋很有节目效果。",
             rationale="center pressure",
             source="openrouter",
         ),
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_play_audio_file",
+        lambda path, wait=False: events.append(("audio", path.name, wait)),
     )
     orchestrator = orchestrator_module.GameOrchestrator(
         state_extractor=object(),
@@ -476,36 +515,141 @@ def test_play_robot_turn_forwards_llm_talk_and_skill(monkeypatch: pytest.MonkeyP
         interaction_controller=FakeInteraction(),
         my_stone=BLACK,
     )
+    for col in range(4):
+        orchestrator.board.place(0, col, WHITE)
+    for row, col in ((2, 2), (3, 3), (3, 4), (4, 3)):
+        orchestrator.board.place(row, col, BLACK)
 
     orchestrator.play_robot_turn()
 
     assert events == [
-        ("speak", "这手棋很有节目效果。"),
+        ("audio", "1.mp3", True),
+        ("speak", "不装了，我要开挂了。"),
         (
             "skill",
             {
                 "source": "openrouter",
                 "row": 1,
                 "col": 1,
+                "skill_row": 0,
+                "skill_col": 0,
                 "rationale": "center pressure",
             },
         ),
     ]
+    assert orchestrator.board.get(0, 0) == EMPTY
+    assert orchestrator.board.get(1, 1) == BLACK
+    assert orchestrator.next_turn_stone() == WHITE
+
+
+def test_play_robot_turn_ignores_skill_without_immediate_loss(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[tuple[str, object]] = []
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+
+    class FakeInteraction:
+        def speak(self, text: str) -> None:
+            events.append(("speak", text))
+
+        def dance(self, name: str = "default") -> None:
+            events.append(("dance", name))
+
+        def use_skill_gomoku(self, context=None) -> None:
+            events.append(("skill", context))
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "ai_decide_verbose",
+        lambda _board, _stone: AIDecision(
+            row=1,
+            col=1,
+            use_skill=True,
+            skill_row=0,
+            skill_col=0,
+            trash_talk="这也想逼我开技能？",
+            source="openrouter",
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_play_audio_file",
+        lambda path, wait=False: events.append(("audio", path.name, wait)),
+    )
+    orchestrator = orchestrator_module.GameOrchestrator(
+        state_extractor=object(),
+        pose_mapper=mapper,
+        interaction_controller=FakeInteraction(),
+        my_stone=BLACK,
+    )
+    orchestrator.board.place(0, 0, WHITE)
+    orchestrator.board.place(2, 2, BLACK)
+    caplog.set_level(logging.WARNING, logger="src.orchestrator")
+
+    orchestrator.play_robot_turn()
+
+    assert events == []
+    assert orchestrator.board.get(0, 0) == WHITE
+    assert orchestrator.board.get(1, 1) == BLACK
+    assert "Ignoring AI skill request" in caplog.text
+
+
+def test_trash_talk_is_spoken_after_robot_move(monkeypatch: pytest.MonkeyPatch) -> None:
+    events: list[tuple[str, object]] = []
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+
+    class FakeInteraction:
+        def speak(self, text: str) -> None:
+            events.append(("speak", text))
+
+        def dance(self, name: str = "default") -> None:
+            events.append(("dance", name))
+
+        def use_skill_gomoku(self, context=None) -> None:
+            events.append(("skill", context))
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "ai_decide_verbose",
+        lambda _board, _stone: AIDecision(
+            row=1,
+            col=1,
+            trash_talk="这手落下去，你已经开始冒汗了。",
+            source="openrouter",
+        ),
+    )
+    orchestrator = orchestrator_module.GameOrchestrator(
+        state_extractor=object(),
+        pose_mapper=mapper,
+        interaction_controller=FakeInteraction(),
+        trash_talk_enabled=True,
+        my_stone=BLACK,
+    )
+
+    orchestrator.play_robot_turn()
+
+    assert orchestrator.board.get(1, 1) == BLACK
+    assert events == [("speak", "这手落下去，你已经开始冒汗了。")]
 
 
 def test_openrouter_decision_parses_one_based_legal_move() -> None:
     board = np.zeros((9, 9), dtype=np.int8)
     board[4, 4] = BLACK
+    board[2, 3] = WHITE
 
     decision = llm_ai_module._parse_decision(
         '{"should_play": true, "row": 5, "col": 6, '
-        '"use_skill": true, "trash_talk": "你这棋盘归我了"}',
+        '"use_skill": true, "skill_row": 3, "skill_col": 4, '
+        '"trash_talk": "你这棋盘归我了"}',
         board,
     )
 
     assert decision.row == 4
     assert decision.col == 5
     assert decision.use_skill is True
+    assert decision.skill_row == 2
+    assert decision.skill_col == 3
     assert decision.trash_talk == "你这棋盘归我了"
     assert decision.source == "openrouter"
 
@@ -517,12 +661,15 @@ def test_openrouter_prompt_lists_occupied_coordinates() -> None:
     board[4, 4] = WHITE
     board[4, 3] = WHITE
 
-    messages = llm_ai_module._messages(board, BLACK, "medium")
+    messages = llm_ai_module._messages(board, BLACK, "medium", trash_talk_enabled=True)
     prompt = messages[1]["content"]
 
     assert "black(2): (3, 3), (3, 4)" in prompt
     assert "white(2): (5, 4), (5, 5)" in prompt
     assert "禁止选择 black/white 列表里已经出现过的坐标" in prompt
+    assert "下一手已经存在直接成五" in prompt
+    assert "skill_row/skill_col" in prompt
+    assert "垃圾话已开启" in prompt
 
 
 def test_openrouter_decision_rejects_occupied_move() -> None:

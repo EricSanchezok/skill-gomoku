@@ -100,6 +100,23 @@ def test_live_config_allows_matching_pickup_pose_before_hardware_startup() -> No
     )
 
 
+def test_live_config_rejects_missing_skill_pickup_pose_for_openrouter() -> None:
+    live = _load_live_module()
+
+    with pytest.raises(ValueError, match="remove-stone skill"):
+        live._validate_live_config_safety(
+            {
+                "robot": {
+                    "waiting_pose": "waiting",
+                    "pickup_poses": {"black": {"joint.pos": 1.0}, "white": None},
+                    "pickup_top_poses": {"black": {"joint.pos": 2.0}, "white": None},
+                },
+                "game": {"robot_stone": "black", "ai": {"provider": "openrouter"}},
+            },
+            _args(),
+        )
+
+
 def test_live_config_rejects_missing_pickup_top_pose_before_hardware_startup() -> None:
     live = _load_live_module()
 
@@ -170,6 +187,29 @@ def test_live_run_disable_air_pump_override_wins() -> None:
     live._apply_cli_overrides(config, args)
 
     assert config["robot"]["air_pump"]["enabled"] is False
+
+
+def test_live_run_trash_talk_override_updates_game_and_openrouter_config() -> None:
+    live = _load_live_module()
+    config = {"robot": {"air_pump": {}}, "game": {"ai": {"openrouter": {}}}}
+    args = live._build_parser().parse_args(["--trash-talk"])
+
+    live._apply_cli_overrides(config, args)
+
+    assert config["game"]["trash_talk_enabled"] is True
+    assert config["game"]["ai"]["openrouter"]["trash_talk_enabled"] is True
+
+
+def test_live_run_startup_prompt_can_enable_trash_talk(monkeypatch) -> None:
+    live = _load_live_module()
+    config = {"robot": {}, "game": {"ai": {}}}
+    args = live._build_parser().parse_args([])
+    monkeypatch.setattr("builtins.input", lambda _prompt: "y")
+
+    live._prompt_trash_talk(config, args)
+
+    assert config["game"]["trash_talk_enabled"] is True
+    assert config["game"]["ai"]["openrouter"]["trash_talk_enabled"] is True
 
 
 def test_confirming_robot_mover_prompts_before_delegating() -> None:

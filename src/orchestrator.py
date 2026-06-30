@@ -1,6 +1,8 @@
 """主流程编排器 — 相机→分析→AI→机械臂循环."""
 
 import logging
+import shutil
+import subprocess
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,7 +12,7 @@ import numpy as np
 
 from src.game.ai import PROJECT_ROOT, ai_decide_verbose, ai_reset, configure_ai_from_config
 from src.game.board import Board, check_win
-from src.game.decision import AIDecision, AIRefusedMoveError
+from src.game.decision import AIDecision, AIMoveError, AIRefusedMoveError
 from src.game.play_area import PlayArea, parse_play_area_config
 from src.interaction import (
     HumanTurnCommand,
@@ -35,6 +37,7 @@ from src.robot.so101_mover import PRESET_ACTIONS
 from src.utils.constants import BLACK, EMPTY, WHITE
 
 logger = logging.getLogger(__name__)
+SKILL_AUDIO_PATH = PROJECT_ROOT / "docs" / "MP3" / "1.mp3"
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,7 @@ class GameOrchestrator:
         play_area: PlayArea | None = None,
         human_turn_controller: HumanTurnController | None = None,
         interaction_controller: RobotInteractionController | None = None,
+        trash_talk_enabled: bool = False,
         my_stone: int = BLACK,
     ):
         self.extractor = state_extractor
@@ -107,8 +111,10 @@ class GameOrchestrator:
         self.opponent = self.human_stone
         self.human_turn_controller = human_turn_controller
         self.interaction_controller = interaction_controller or NullRobotInteraction()
+        self.trash_talk_enabled = bool(trash_talk_enabled)
         self.board = Board()
         self.move_count = 0
+        self._next_turn_override: int | None = None
 
     @classmethod
     def from_config(
@@ -175,6 +181,7 @@ class GameOrchestrator:
             ),
             human_turn_controller=human_turn_controller,
             interaction_controller=interaction_controller,
+            trash_talk_enabled=bool(game_cfg.get("trash_talk_enabled", False)),
             my_stone=_parse_robot_stone_from_game_config(game_cfg),
         )
 
@@ -223,6 +230,7 @@ class GameOrchestrator:
         ai_reset()
         self.board = self.get_board_state()
         self.move_count = sum(_stone_counts(self.board.state))
+        self._next_turn_override = None
         return self.board
 
     @property
@@ -239,6 +247,9 @@ class GameOrchestrator:
 
     def next_turn_stone(self) -> int:
         """Return the stone color that should move next under normal Gomoku order."""
+
+        if self._next_turn_override is not None:
+            return self._next_turn_override
 
         black_count, white_count = _stone_counts(self.board.state)
         if black_count == white_count:
@@ -269,12 +280,13 @@ class GameOrchestrator:
                 f"{stone_name(self.next_turn_stone())}"
             )
         decision = ai_decide_verbose(self.play_area.crop(self.board.state), self.robot_stone)
-        self._handle_ai_decision(decision)
         if not decision.should_play:
             raise AIRefusedMoveError("AI chose not to play")
+        self._handle_ai_decision(decision)
         local_row, local_col = decision.row, decision.col
         row, col = self.play_area.to_global(local_row, local_col)
         target = self.execute_my_move(row, col)
+        self._speak_after_robot_move(decision)
         return row, col, target
 
     def get_board_state(self) -> Board:
@@ -348,6 +360,8 @@ class GameOrchestrator:
                     if stone == self.human_stone:
                         self.board.place(r, c, stone)
                         self.move_count = sum(_stone_counts(self.board.state))
+                        if self._next_turn_override is not None:
+                            self._next_turn_override = self.robot_stone
                         return self.board
             except Exception as e:
                 logger.warning(f"Wait for opponent failed: {e}")
@@ -391,6 +405,8 @@ class GameOrchestrator:
                 raise
         self.board.place(row, col, self.my_stone)
         self.move_count += 1
+        if self._next_turn_override is not None:
+            self._next_turn_override = self.human_stone
         return target
 
     def run_once(self) -> int:
@@ -415,9 +431,9 @@ class GameOrchestrator:
             return EMPTY
 
         decision = ai_decide_verbose(self.play_area.crop(self.board.state), self.robot_stone)
-        self._handle_ai_decision(decision)
         if not decision.should_play:
             raise AIRefusedMoveError("AI chose not to play")
+        self._handle_ai_decision(decision)
         local_row, local_col = decision.row, decision.col
         row, col = self.play_area.to_global(local_row, local_col)
         target = self._target_for_cell(row, col)
@@ -425,6 +441,9 @@ class GameOrchestrator:
 
         self.board.place(row, col, self.robot_stone)
         self.move_count += 1
+        if self._next_turn_override is not None:
+            self._next_turn_override = self.human_stone
+        self._speak_after_robot_move(decision)
         winner = check_win(self.board.state, (row, col))
         return winner
 
@@ -438,9 +457,16 @@ class GameOrchestrator:
 
         self.interaction_controller.dance(name)
 
-    def robot_use_skill_gomoku(self, context: Mapping[str, Any] | None = None) -> None:
+    def robot_use_skill_gomoku(
+        self,
+        context: Mapping[str, Any] | None = None,
+        *,
+        speech: str = "不装了，我要开挂了。",
+    ) -> None:
         """Reserved HRI hook for invoking an external skill-gomoku action."""
 
+        _play_audio_file(SKILL_AUDIO_PATH, wait=True)
+        self.robot_say(speech)
         self.interaction_controller.use_skill_gomoku(context)
 
     def move_to_waiting_pose(self) -> RobotPose | None:
@@ -451,17 +477,30 @@ class GameOrchestrator:
         return self.robot_mover.move_to(self.waiting_pose)
 
     def _handle_ai_decision(self, decision: AIDecision) -> None:
-        if decision.trash_talk:
-            self.robot_say(decision.trash_talk)
         if decision.use_skill:
+            if not _has_immediate_winning_move(
+                self.play_area.crop(self.board.state),
+                self.human_stone,
+            ):
+                logger.warning("Ignoring AI skill request: opponent has no immediate win threat")
+                return
+            row, col = self._skill_target_for_decision(decision)
             self.robot_use_skill_gomoku(
                 {
                     "source": decision.source,
                     "row": decision.row,
                     "col": decision.col,
+                    "skill_row": row,
+                    "skill_col": col,
                     "rationale": decision.rationale,
                 }
             )
+            self._execute_remove_opponent_stone_skill(row, col)
+
+    def _speak_after_robot_move(self, decision: AIDecision) -> None:
+        if not self.trash_talk_enabled:
+            return
+        self.robot_say(decision.trash_talk or "这手下完，我都替你紧张。")
 
     def _pickup_pose_for_robot_stone(self) -> dict[str, float] | None:
         """Return the pickup pose for the robot's configured stone colour."""
@@ -472,6 +511,68 @@ class GameOrchestrator:
         """Return the safe pickup exit/entry pose for the configured stone colour."""
 
         return self.pickup_top_poses.get(self.robot_stone, self.pickup_top_pose)
+
+    def _pickup_pose_for_stone(self, stone: int) -> dict[str, float] | None:
+        return self.pickup_poses.get(stone, self.pickup_pose)
+
+    def _pickup_top_pose_for_stone(self, stone: int) -> dict[str, float] | None:
+        return self.pickup_top_poses.get(stone, self.pickup_top_pose)
+
+    def _skill_target_for_decision(self, decision: AIDecision) -> tuple[int, int]:
+        if decision.skill_row is not None and decision.skill_col is not None:
+            row, col = self.play_area.to_global(decision.skill_row, decision.skill_col)
+            if self.board.get(row, col) != self.human_stone:
+                raise AIMoveError(f"Skill target ({row}, {col}) is not an opponent stone")
+            return row, col
+
+        target = _best_stone_to_remove(self.play_area.crop(self.board.state), self.human_stone)
+        if target is None:
+            raise AIMoveError("AI requested skill, but there is no opponent stone to remove")
+        return self.play_area.to_global(*target)
+
+    def _execute_remove_opponent_stone_skill(self, row: int, col: int) -> None:
+        if self.board.get(row, col) != self.human_stone:
+            raise AIMoveError(f"Skill target ({row}, {col}) is not an opponent stone")
+
+        if self.robot_mover is not None:
+            self._move_board_stone_to_pickup_box(row, col, self.human_stone)
+
+        self.board.remove(row, col, self.human_stone)
+        self.move_count = sum(_stone_counts(self.board.state))
+        self._next_turn_override = self.robot_stone
+
+    def _move_board_stone_to_pickup_box(self, row: int, col: int, stone: int) -> None:
+        if self.suction_controller is None:
+            raise ValueError("suction_controller is required for the remove-stone skill")
+        if self.waiting_pose is None:
+            raise ValueError("waiting_pose is required before moving to a board target")
+
+        board_target = self._target_for_cell(row, col)
+        if not isinstance(board_target, Mapping):
+            raise TypeError("robot_mover integration requires a mapping robot target")
+
+        drop_pose = self._pickup_pose_for_stone(stone)
+        drop_top_pose = self._pickup_top_pose_for_stone(stone)
+        if drop_pose is None or drop_top_pose is None:
+            raise ValueError("pickup pose and pickup top pose are required for the skill stone")
+
+        stone_picked = False
+        try:
+            self.move_to_waiting_pose()
+            self.robot_mover.move_to(board_target)
+            self.suction_controller.pick_stone()
+            stone_picked = True
+            self.move_to_waiting_pose()
+            self.robot_mover.move_to(drop_top_pose)
+            self.robot_mover.move_to(drop_pose)
+            self.suction_controller.drop_stone()
+            stone_picked = False
+            self.robot_mover.move_to(drop_top_pose)
+            self.move_to_waiting_pose()
+        except Exception:
+            if stone_picked:
+                self.suction_controller.off()
+            raise
 
     def _target_for_cell(self, row: int, col: int) -> RobotPose:
         if not self.play_area.contains(row, col):
@@ -574,6 +675,83 @@ def _stone_counts(board_matrix: np.ndarray) -> tuple[int, int]:
         int(np.count_nonzero(board_matrix == BLACK)),
         int(np.count_nonzero(board_matrix == WHITE)),
     )
+
+
+def _best_stone_to_remove(board_matrix: np.ndarray, stone: int) -> tuple[int, int] | None:
+    rows, cols = np.where(board_matrix == stone)
+    if rows.size == 0:
+        return None
+    center_r = (board_matrix.shape[0] - 1) / 2
+    center_c = (board_matrix.shape[1] - 1) / 2
+
+    def score(row: int, col: int) -> tuple[int, float]:
+        best_line = 1
+        for dr, dc in ((0, 1), (1, 0), (1, 1), (1, -1)):
+            line = 1
+            for sign in (1, -1):
+                r, c = row, col
+                while True:
+                    r += sign * dr
+                    c += sign * dc
+                    if not (
+                        0 <= r < board_matrix.shape[0]
+                        and 0 <= c < board_matrix.shape[1]
+                        and board_matrix[r, c] == stone
+                    ):
+                        break
+                    line += 1
+            best_line = max(best_line, line)
+        center_distance = abs(row - center_r) + abs(col - center_c)
+        return best_line, -center_distance
+
+    candidates = [(int(row), int(col)) for row, col in zip(rows, cols, strict=True)]
+    return max(candidates, key=lambda item: score(*item))
+
+
+def _has_immediate_winning_move(board_matrix: np.ndarray, stone: int) -> bool:
+    for row, col in zip(*np.where(board_matrix == EMPTY), strict=True):
+        candidate = board_matrix.copy()
+        candidate[row, col] = stone
+        if check_win(candidate, (int(row), int(col))) == stone:
+            return True
+    return False
+
+
+def _play_audio_file(path: Path, *, wait: bool = False) -> None:
+    command = _audio_command(path)
+    if command is None:
+        logger.warning("No audio player found for %s", path)
+        return
+    try:
+        if wait:
+            subprocess.run(
+                command,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as exc:
+        logger.warning("Failed to play audio %s: %s", path, exc)
+
+
+def _audio_command(path: Path) -> list[str] | None:
+    if not path.is_file():
+        return None
+    players = (
+        ("afplay", [str(path)]),
+        ("mpg123", ["-q", str(path)]),
+        ("mpg321", ["-q", str(path)]),
+        ("mpv", ["--no-video", "--really-quiet", str(path)]),
+        ("ffplay", ["-nodisp", "-autoexit", "-loglevel", "quiet", str(path)]),
+        ("cvlc", ["--play-and-exit", "--quiet", str(path)]),
+    )
+    for executable, args in players:
+        resolved = shutil.which(executable)
+        if resolved is not None:
+            return [resolved, *args]
+    return None
 
 
 def _find_added_stone(

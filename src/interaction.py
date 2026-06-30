@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import logging
+import shutil
+import subprocess
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -9,6 +12,8 @@ from enum import Enum
 from typing import Any, Protocol
 
 from src.utils.constants import BLACK, WHITE
+
+logger = logging.getLogger(__name__)
 
 
 class HumanTurnCommand(str, Enum):
@@ -66,11 +71,19 @@ class NullRobotInteraction:
 class ConsoleRobotInteraction:
     """Console-backed placeholder for future speech, dance, and skill hooks."""
 
-    def __init__(self, print_fn: Callable[[str], None] = print) -> None:
+    def __init__(
+        self,
+        print_fn: Callable[[str], None] = print,
+        *,
+        voice_enabled: bool = True,
+    ) -> None:
         self._print = print_fn
+        self._voice_enabled = voice_enabled
 
     def speak(self, text: str) -> None:
         self._print(f"[robot:speak] {text}")
+        if self._voice_enabled:
+            _speak_system_voice(text)
 
     def dance(self, name: str = "default") -> None:
         self._print(f"[robot:dance] {name}")
@@ -174,3 +187,30 @@ def stone_name(stone: int) -> str:
     if stone == WHITE:
         return "白棋"
     return f"未知棋子({stone})"
+
+
+def _speak_system_voice(text: str) -> None:
+    command = _speech_command(text)
+    if command is None:
+        logger.warning("No system speech command found; skipped speech: %s", text)
+        return
+    try:
+        subprocess.run(command, check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except OSError as exc:
+        logger.warning("Failed to run system speech command: %s", exc)
+
+
+def _speech_command(text: str) -> list[str] | None:
+    if not text.strip():
+        return None
+    candidates = (
+        ("say", [text]),
+        ("spd-say", ["--wait", text]),
+        ("espeak-ng", [text]),
+        ("espeak", [text]),
+    )
+    for executable, args in candidates:
+        resolved = shutil.which(executable)
+        if resolved is not None:
+            return [resolved, *args]
+    return None

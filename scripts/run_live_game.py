@@ -98,9 +98,6 @@ def main() -> int:
     config_path = _project_path(args.config)
     config = load_config(config_path)
     _apply_cli_overrides(config, args)
-
-    interaction = ConsoleRobotInteraction()
-    human_controller = KeyboardHumanTurnController(robot_interaction=interaction)
     mover = None
     robot_mover = None
     orchestrator = None
@@ -116,9 +113,13 @@ def main() -> int:
         if not args.yes:
             startup_menu_shown = True
             config = _run_startup_menu(config_path, config, args, mover)
+            _prompt_trash_talk(config, args)
 
         _validate_engine_path(config)
         _validate_live_config_safety(config, args)
+
+        interaction = ConsoleRobotInteraction()
+        human_controller = KeyboardHumanTurnController(robot_interaction=interaction)
 
         camera = create_camera(config, mock=args.mock_camera)
         extractor = StateExtractor(camera=camera, config=config)
@@ -161,7 +162,8 @@ def main() -> int:
             print(f"Turn {turn_idx}: next = {stone_name(orchestrator.next_turn_stone())}")
 
             if orchestrator.is_robot_turn():
-                interaction.speak("轮到我了。")
+                if not orchestrator.trash_talk_enabled:
+                    interaction.speak("轮到我了。")
                 try:
                     row, col, target = orchestrator.play_robot_turn()
                 except AIRefusedMoveError as exc:
@@ -180,7 +182,12 @@ def main() -> int:
                     orchestrator.sync_board_state()
                     winner = check_win(orchestrator.board.state)
             else:
-                interaction.speak("请你下棋，下完后按确认键。")
+                prompt = (
+                    "该你了，别磨蹭。"
+                    if orchestrator.trash_talk_enabled
+                    else "请你下棋，下完后按确认键。"
+                )
+                interaction.speak(prompt)
                 board = orchestrator.wait_for_opponent(
                     max_attempts=args.human_attempts,
                     poll_interval_seconds=args.poll_interval,
@@ -247,6 +254,19 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--time-per-move-ms", type=int, default=None)
     parser.add_argument("--llm-model", default=None, help="Override game.ai.openrouter.model")
     parser.add_argument("--llm-strength", default=None, help="garbage, medium, or strong")
+    trash_talk_group = parser.add_mutually_exclusive_group()
+    trash_talk_group.add_argument(
+        "--trash-talk",
+        dest="trash_talk",
+        action="store_true",
+        help="Enable robot trash talk after each robot move.",
+    )
+    trash_talk_group.add_argument(
+        "--no-trash-talk",
+        dest="trash_talk",
+        action="store_false",
+        help="Disable robot trash talk.",
+    )
     parser.add_argument("--duration", type=float, default=DEFAULT_LOWLEVEL_DURATION_SECONDS)
     parser.add_argument("--dt", type=float, default=DEFAULT_LOWLEVEL_DT_SECONDS)
     parser.add_argument("--settle", type=float, default=DEFAULT_LOWLEVEL_SETTLE_SECONDS)
@@ -302,7 +322,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yes", action="store_true", help="Skip final start confirmation")
     parser.add_argument("--release-on-exit", action="store_true")
     parser.add_argument("--verbose", action="store_true")
-    parser.set_defaults(sync_after_robot=False, confirm_robot_moves=True)
+    parser.set_defaults(sync_after_robot=False, confirm_robot_moves=True, trash_talk=None)
     return parser
 
 
@@ -330,11 +350,27 @@ def _apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> No
     if args.llm_strength is not None:
         openrouter_cfg = _ensure_mapping(ai_cfg, "openrouter")
         openrouter_cfg["strength"] = args.llm_strength
+    if args.trash_talk is not None:
+        game_cfg["trash_talk_enabled"] = bool(args.trash_talk)
+        openrouter_cfg = _ensure_mapping(ai_cfg, "openrouter")
+        openrouter_cfg["trash_talk_enabled"] = bool(args.trash_talk)
 
     pump_cfg = _ensure_mapping(robot_cfg, "air_pump")
     pump_cfg["enabled"] = not args.disable_air_pump
     if args.dry_run_air_pump:
         pump_cfg["dry_run"] = True
+
+
+def _prompt_trash_talk(config: dict[str, Any], args: argparse.Namespace) -> None:
+    if args.yes or args.trash_talk is not None:
+        return
+    answer = input("Enable robot trash talk after each robot move? [y/N] > ").strip().lower()
+    enabled = answer in {"y", "yes", "1", "true", "on"}
+    game_cfg = _ensure_mapping(config, "game")
+    ai_cfg = _ensure_mapping(game_cfg, "ai")
+    openrouter_cfg = _ensure_mapping(ai_cfg, "openrouter")
+    game_cfg["trash_talk_enabled"] = enabled
+    openrouter_cfg["trash_talk_enabled"] = enabled
 
 
 def _create_mover(config: Mapping[str, Any], args: argparse.Namespace) -> SO101LowLevelMover:
@@ -586,7 +622,6 @@ def _validate_live_robot_safety(
             "robot.pickup_top_poses.black/white before live runs."
         )
 
-
 def _validate_live_config_safety(
     config: Mapping[str, Any],
     args: argparse.Namespace,
@@ -628,6 +663,22 @@ def _validate_live_config_safety(
             "Record robot.pickup_top_poses.black/white first."
         )
 
+    if _ai_provider_from_config(config) == "openrouter":
+        opponent_stone = "white" if robot_stone == "black" else "black"
+        opponent_pickup_pose = None
+        if isinstance(pickup_poses, Mapping):
+            opponent_pickup_pose = pickup_poses.get(opponent_stone)
+        opponent_pickup_pose = opponent_pickup_pose or robot_cfg.get("pickup_pose")
+        opponent_pickup_top_pose = None
+        if isinstance(pickup_top_poses, Mapping):
+            opponent_pickup_top_pose = pickup_top_poses.get(opponent_stone)
+        opponent_pickup_top_pose = opponent_pickup_top_pose or robot_cfg.get("pickup_top_pose")
+        if opponent_pickup_pose is None or opponent_pickup_top_pose is None:
+            raise ValueError(
+                "Missing opponent pickup pose/top pose for the remove-stone skill before "
+                "hardware startup. Record both black and white pickup poses first."
+            )
+
 
 def _resolve_max_turns(args: argparse.Namespace, orchestrator: GameOrchestrator) -> int:
     if args.max_turns is not None:
@@ -667,6 +718,7 @@ def _confirm_start(
     print(f"  robot_stone: {robot_stone}")
     print(f"  robot: {'dry-run' if args.dry_run_robot else 'enabled'}")
     print(f"  air_pump: {'enabled' if pump_enabled else 'disabled'}")
+    print(f"  trash_talk: {'enabled' if game_cfg.get('trash_talk_enabled', False) else 'disabled'}")
     print(f"  play_area: {orchestrator.play_area.describe()}")
     print(f"  max_turns: {max_turns}")
     print(
