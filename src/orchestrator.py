@@ -304,8 +304,7 @@ class GameOrchestrator:
         camera_count = sum(_stone_counts(camera_board.state))
         if camera_count < current_count:
             logger.warning(
-                "Skipping camera sync because detected stone count regressed "
-                "from %d to %d",
+                "Skipping camera sync because detected stone count regressed from %d to %d",
                 current_count,
                 camera_count,
             )
@@ -461,7 +460,7 @@ class GameOrchestrator:
         self,
         context: Mapping[str, Any] | None = None,
         *,
-        speech: str = "不装了，我要开挂了。",
+        speech: str = "技能五子棋，飞沙走石",
     ) -> None:
         """Reserved HRI hook for invoking an external skill-gomoku action."""
 
@@ -519,13 +518,22 @@ class GameOrchestrator:
         return self.pickup_top_poses.get(stone, self.pickup_top_pose)
 
     def _skill_target_for_decision(self, decision: AIDecision) -> tuple[int, int]:
+        play_board = self.play_area.crop(self.board.state)
+        threat_targets = _threat_stones_to_remove(play_board, self.human_stone)
+
         if decision.skill_row is not None and decision.skill_col is not None:
             row, col = self.play_area.to_global(decision.skill_row, decision.skill_col)
             if self.board.get(row, col) != self.human_stone:
                 raise AIMoveError(f"Skill target ({row}, {col}) is not an opponent stone")
-            return row, col
+            if (decision.skill_row, decision.skill_col) in threat_targets:
+                return row, col
+            logger.warning(
+                "Ignoring AI skill target (%s, %s): not part of the immediate win threat",
+                decision.skill_row,
+                decision.skill_col,
+            )
 
-        target = _best_stone_to_remove(self.play_area.crop(self.board.state), self.human_stone)
+        target = _best_stone_to_remove(play_board, self.human_stone, threat_targets or None)
         if target is None:
             raise AIMoveError("AI requested skill, but there is no opponent stone to remove")
         return self.play_area.to_global(*target)
@@ -677,9 +685,17 @@ def _stone_counts(board_matrix: np.ndarray) -> tuple[int, int]:
     )
 
 
-def _best_stone_to_remove(board_matrix: np.ndarray, stone: int) -> tuple[int, int] | None:
-    rows, cols = np.where(board_matrix == stone)
-    if rows.size == 0:
+def _best_stone_to_remove(
+    board_matrix: np.ndarray,
+    stone: int,
+    candidates: set[tuple[int, int]] | None = None,
+) -> tuple[int, int] | None:
+    if candidates is None:
+        rows, cols = np.where(board_matrix == stone)
+        candidate_list = [(int(row), int(col)) for row, col in zip(rows, cols, strict=True)]
+    else:
+        candidate_list = [(row, col) for row, col in candidates if board_matrix[row, col] == stone]
+    if not candidate_list:
         return None
     center_r = (board_matrix.shape[0] - 1) / 2
     center_c = (board_matrix.shape[1] - 1) / 2
@@ -704,17 +720,46 @@ def _best_stone_to_remove(board_matrix: np.ndarray, stone: int) -> tuple[int, in
         center_distance = abs(row - center_r) + abs(col - center_c)
         return best_line, -center_distance
 
-    candidates = [(int(row), int(col)) for row, col in zip(rows, cols, strict=True)]
-    return max(candidates, key=lambda item: score(*item))
+    return max(candidate_list, key=lambda item: score(*item))
 
 
 def _has_immediate_winning_move(board_matrix: np.ndarray, stone: int) -> bool:
+    return bool(_immediate_winning_moves(board_matrix, stone))
+
+
+def _immediate_winning_moves(board_matrix: np.ndarray, stone: int) -> list[tuple[int, int]]:
+    moves: list[tuple[int, int]] = []
     for row, col in zip(*np.where(board_matrix == EMPTY), strict=True):
         candidate = board_matrix.copy()
         candidate[row, col] = stone
         if check_win(candidate, (int(row), int(col))) == stone:
-            return True
-    return False
+            moves.append((int(row), int(col)))
+    return moves
+
+
+def _threat_stones_to_remove(board_matrix: np.ndarray, stone: int) -> set[tuple[int, int]]:
+    threats: set[tuple[int, int]] = set()
+    directions = ((0, 1), (1, 0), (1, 1), (1, -1))
+    for row, col in _immediate_winning_moves(board_matrix, stone):
+        candidate = board_matrix.copy()
+        candidate[row, col] = stone
+        for dr, dc in directions:
+            line = [(row, col)]
+            for sign in (1, -1):
+                r, c = row, col
+                while True:
+                    r += sign * dr
+                    c += sign * dc
+                    if not (
+                        0 <= r < candidate.shape[0]
+                        and 0 <= c < candidate.shape[1]
+                        and candidate[r, c] == stone
+                    ):
+                        break
+                    line.append((int(r), int(c)))
+            if len(line) >= 5:
+                threats.update(point for point in line if point != (row, col))
+    return threats
 
 
 def _play_audio_file(path: Path, *, wait: bool = False) -> None:

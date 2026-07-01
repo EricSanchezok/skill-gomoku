@@ -40,6 +40,7 @@ class OpenRouterSettings:
     max_retries: int = 2
     retry_delay_seconds: float = 0.5
     trash_talk_enabled: bool = False
+    skill_enabled: bool = True
     api_key: str | None = None
 
 
@@ -71,6 +72,8 @@ def decide_with_openrouter(
         try:
             data = _request_chat_completion(payload, api_key=api_key, settings=settings)
             decision = _parse_decision(_message_content(data), board, my_stone)
+            if not settings.skill_enabled and decision.use_skill:
+                raise AIMoveError("OpenRouter LLM requested skill while skill is disabled")
             logger.info(
                 "OpenRouter move response %d/%d: local_1based=(%d,%d) skill=%s "
                 "skill_target=%s talk=%s",
@@ -146,6 +149,12 @@ def openrouter_settings_from_config(
                 ai_cfg.get("trash_talk_enabled", game_cfg.get("trash_talk_enabled", False)),
             )
         ),
+        skill_enabled=bool(
+            openrouter_cfg.get(
+                "skill_enabled",
+                ai_cfg.get("skill_enabled", game_cfg.get("skill_enabled", True)),
+            )
+        ),
     )
 
 
@@ -161,6 +170,7 @@ def _chat_payload(
             my_stone,
             settings.strength,
             trash_talk_enabled=settings.trash_talk_enabled,
+            skill_enabled=settings.skill_enabled,
         ),
         "temperature": settings.temperature,
         "max_tokens": settings.max_tokens,
@@ -244,6 +254,7 @@ def _messages(
     strength: str,
     *,
     trash_talk_enabled: bool = False,
+    skill_enabled: bool = True,
 ) -> list[dict[str, str]]:
     size = board.shape[0]
     my_name = _stone_name(my_stone)
@@ -266,13 +277,7 @@ def _messages(
             _stone_coordinate_line(board, BLACK),
             _stone_coordinate_line(board, WHITE),
             "禁止选择 black/white 列表里已经出现过的坐标。",
-            (
-                "你有一个不讲武德的技能，但开启条件极端严格：只有当对手下一手"
-                "已经存在直接成五的落点、你马上要输时，才可以 use_skill=true，"
-                f"吸走一个{opponent_name}并放回棋盒。"
-                "如果使用技能，skill_row/skill_col 必须指向一个对手已有棋子。"
-                "其他任何局面都必须 use_skill=false。"
-            ),
+            _skill_prompt(opponent_name, enabled=skill_enabled),
             (
                 "垃圾话已开启：trash_talk 必须是一句短促、有节目效果的嘲讽。"
                 if trash_talk_enabled
@@ -284,11 +289,22 @@ def _messages(
                 '"use_skill": false, "skill_row": null, "skill_col": null, '
                 '"trash_talk": "短句，可为空", "rationale": "短句"}'
             ),
-            "如果还有合法位置，should_play 必须为 true；row/col 必须在 1 到 "
-            f"{size} 之间。",
+            f"如果还有合法位置，should_play 必须为 true；row/col 必须在 1 到 {size} 之间。",
         ]
     )
     return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+
+
+def _skill_prompt(opponent_name: str, *, enabled: bool) -> str:
+    if not enabled:
+        return "技能已关闭：use_skill 必须为 false，skill_row/skill_col 必须为 null。"
+    return (
+        "你有一个不讲武德的技能，但开启条件极端严格：只有当对手下一手"
+        "已经存在直接成五的落点、你马上要输时，才可以 use_skill=true，"
+        f"吸走一个{opponent_name}并放回棋盒。"
+        "如果使用技能，skill_row/skill_col 必须指向一个对手已有棋子。"
+        "其他任何局面都必须 use_skill=false。"
+    )
 
 
 def _parse_decision(content: str, board: np.ndarray, my_stone: int = BLACK) -> AIDecision:
@@ -316,9 +332,13 @@ def _parse_decision(content: str, board: np.ndarray, my_stone: int = BLACK) -> A
             f"({row + 1}, {col + 1}); LLM board was:\n{_board_text(board)}"
         )
     opponent_stone = WHITE if my_stone == BLACK else BLACK
-    skill_row, skill_col = _parse_skill_target(obj, board, opponent_stone) if use_skill else (
-        None,
-        None,
+    skill_row, skill_col = (
+        _parse_skill_target(obj, board, opponent_stone)
+        if use_skill
+        else (
+            None,
+            None,
+        )
     )
     return AIDecision(
         row=row,

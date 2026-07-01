@@ -337,8 +337,8 @@ python scripts/run_live_game.py --dry-run-robot --dry-run-air-pump
 # 显式指定树莓派上的 Rapfi
 python scripts/run_live_game.py --engine-path bin/rapfi/linux-aarch64/rapfi
 
-# 已确认路径安全后，关闭每段机械臂移动前的确认
-python scripts/run_live_game.py --full-game --no-confirm-robot-moves
+# 新场地逐段检查机械臂路径时，开启每段移动前确认
+python scripts/run_live_game.py --confirm-robot-moves
 
 # 调试机器人落子后的即时视觉同步；默认等人类确认后再识别
 python scripts/run_live_game.py --sync-after-robot

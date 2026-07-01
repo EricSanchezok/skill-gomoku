@@ -152,11 +152,7 @@ def main() -> int:
         winner = check_win(orchestrator.board.state)
 
         turn_idx = 0
-        while (
-            winner == EMPTY
-            and turn_idx < max_turns
-            and not orchestrator.is_play_area_full()
-        ):
+        while winner == EMPTY and turn_idx < max_turns and not orchestrator.is_play_area_full():
             turn_idx += 1
             print()
             print(f"Turn {turn_idx}: next = {stone_name(orchestrator.next_turn_stone())}")
@@ -310,6 +306,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Do not prompt before each real SO101 movement.",
     )
     parser.add_argument(
+        "--confirm-robot-moves",
+        dest="confirm_robot_moves",
+        action="store_true",
+        help="Prompt before each real SO101 movement.",
+    )
+    parser.add_argument(
+        "--disable-skill",
+        action="store_true",
+        help="Disable the OpenRouter remove-stone skill.",
+    )
+    parser.add_argument(
         "--allow-missing-pickup-pose",
         action="store_true",
         help="Allow live robot motion when the configured robot stone has no pickup pose.",
@@ -322,7 +329,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--yes", action="store_true", help="Skip final start confirmation")
     parser.add_argument("--release-on-exit", action="store_true")
     parser.add_argument("--verbose", action="store_true")
-    parser.set_defaults(sync_after_robot=False, confirm_robot_moves=True, trash_talk=None)
+    parser.set_defaults(sync_after_robot=False, confirm_robot_moves=False, trash_talk=None)
     return parser
 
 
@@ -354,6 +361,8 @@ def _apply_cli_overrides(config: dict[str, Any], args: argparse.Namespace) -> No
         game_cfg["trash_talk_enabled"] = bool(args.trash_talk)
         openrouter_cfg = _ensure_mapping(ai_cfg, "openrouter")
         openrouter_cfg["trash_talk_enabled"] = bool(args.trash_talk)
+    openrouter_cfg = _ensure_mapping(ai_cfg, "openrouter")
+    openrouter_cfg["skill_enabled"] = not args.disable_skill
 
     pump_cfg = _ensure_mapping(robot_cfg, "air_pump")
     pump_cfg["enabled"] = not args.disable_air_pump
@@ -622,6 +631,7 @@ def _validate_live_robot_safety(
             "robot.pickup_top_poses.black/white before live runs."
         )
 
+
 def _validate_live_config_safety(
     config: Mapping[str, Any],
     args: argparse.Namespace,
@@ -663,7 +673,7 @@ def _validate_live_config_safety(
             "Record robot.pickup_top_poses.black/white first."
         )
 
-    if _ai_provider_from_config(config) == "openrouter":
+    if _ai_provider_from_config(config) == "openrouter" and _skill_enabled_from_config(config):
         opponent_stone = "white" if robot_stone == "black" else "black"
         opponent_pickup_pose = None
         if isinstance(pickup_poses, Mapping):
@@ -730,6 +740,7 @@ def _confirm_start(
         print(f"  openrouter_model: {openrouter_cfg.get('model', DEFAULT_OPENROUTER_MODEL)}")
         strength = openrouter_cfg.get("strength", game_cfg.get("ai_level", "medium"))
         print(f"  llm_strength: {strength}")
+        print(f"  skill: {'enabled' if _skill_enabled_from_config(config) else 'disabled'}")
     else:
         print(f"  rapfi: {ai_cfg.get('engine_path') or resolve_rapfi_engine_path()}")
     confirm = input("Press Enter to start, or type q to cancel > ").strip().lower()
@@ -743,6 +754,24 @@ def _ensure_mapping(parent: dict[str, Any], key: str) -> dict[str, Any]:
         value = {}
         parent[key] = value
     return value
+
+
+def _skill_enabled_from_config(config: Mapping[str, Any]) -> bool:
+    game_cfg = config.get("game", {})
+    if not isinstance(game_cfg, Mapping):
+        return True
+    ai_cfg = game_cfg.get("ai", {})
+    if not isinstance(ai_cfg, Mapping):
+        return bool(game_cfg.get("skill_enabled", True))
+    openrouter_cfg = ai_cfg.get("openrouter", {})
+    if not isinstance(openrouter_cfg, Mapping):
+        openrouter_cfg = {}
+    return bool(
+        openrouter_cfg.get(
+            "skill_enabled",
+            ai_cfg.get("skill_enabled", game_cfg.get("skill_enabled", True)),
+        )
+    )
 
 
 def _project_path(value: str) -> Path:
@@ -762,11 +791,7 @@ def _format_action_delta(
     *,
     limit: int = 3,
 ) -> str:
-    deltas = {
-        key: float(target[key]) - float(current[key])
-        for key in target
-        if key in current
-    }
+    deltas = {key: float(target[key]) - float(current[key]) for key in target if key in current}
     if not deltas:
         return "  current/delta: unavailable"
     biggest = sorted(deltas.items(), key=lambda item: abs(item[1]), reverse=True)[:limit]

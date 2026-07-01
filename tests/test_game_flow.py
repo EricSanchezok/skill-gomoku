@@ -118,6 +118,7 @@ def test_ai_config_can_select_openrouter(tmp_path) -> None:
     assert settings.openrouter.max_retries == 4
     assert settings.openrouter.retry_delay_seconds == 0.25
     assert settings.openrouter.trash_talk_enabled is True
+    assert settings.openrouter.skill_enabled is True
 
 
 def test_default_live_config_uses_openrouter() -> None:
@@ -129,6 +130,7 @@ def test_default_live_config_uses_openrouter() -> None:
     assert config["game"]["ai"]["openrouter"]["timeout_seconds"] == 45.0
     assert config["game"]["ai"]["openrouter"]["max_tokens"] == 800
     assert config["game"]["ai"]["openrouter"]["max_retries"] == 2
+    assert config["game"]["ai"]["openrouter"]["skill_enabled"] is True
     assert config["game"]["trash_talk_enabled"] is False
 
 
@@ -453,7 +455,7 @@ def test_orchestrator_hri_hooks_forward_to_interaction_controller(
         ("speak", "轮到我了"),
         ("dance", "win"),
         ("audio", "1.mp3", True),
-        ("speak", "不装了，我要开挂了。"),
+        ("speak", "技能五子棋，飞沙走石"),
         ("skill", {"phase": "opening"}),
     ]
 
@@ -565,7 +567,7 @@ def test_play_robot_turn_uses_skill_only_for_immediate_loss(
 
     assert events == [
         ("audio", "1.mp3", True),
-        ("speak", "不装了，我要开挂了。"),
+        ("speak", "技能五子棋，飞沙走石"),
         (
             "skill",
             {
@@ -581,6 +583,63 @@ def test_play_robot_turn_uses_skill_only_for_immediate_loss(
     assert orchestrator.board.get(0, 0) == EMPTY
     assert orchestrator.board.get(1, 1) == BLACK
     assert orchestrator.next_turn_stone() == WHITE
+
+
+def test_play_robot_turn_retargets_skill_to_immediate_threat(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events: list[tuple[str, object]] = []
+    mapper = MeasuredBoardPoseMapper.from_json_data(_measured_pose_data())
+
+    class FakeInteraction:
+        def speak(self, text: str) -> None:
+            events.append(("speak", text))
+
+        def dance(self, name: str = "default") -> None:
+            events.append(("dance", name))
+
+        def use_skill_gomoku(self, context=None) -> None:
+            events.append(("skill", context))
+
+    monkeypatch.setattr(
+        orchestrator_module,
+        "ai_decide_verbose",
+        lambda _board, _stone: AIDecision(
+            row=1,
+            col=1,
+            use_skill=True,
+            skill_row=2,
+            skill_col=0,
+            source="openrouter",
+        ),
+    )
+    monkeypatch.setattr(
+        orchestrator_module,
+        "_play_audio_file",
+        lambda path, wait=False: events.append(("audio", path.name, wait)),
+    )
+    orchestrator = orchestrator_module.GameOrchestrator(
+        state_extractor=object(),
+        pose_mapper=mapper,
+        interaction_controller=FakeInteraction(),
+        my_stone=BLACK,
+    )
+    for col in range(4):
+        orchestrator.board.place(0, col, WHITE)
+    orchestrator.board.place(2, 0, WHITE)
+    for row, col in ((3, 3), (3, 4), (4, 3), (4, 4), (5, 5)):
+        orchestrator.board.place(row, col, BLACK)
+
+    caplog.set_level(logging.WARNING, logger="src.orchestrator")
+    orchestrator.play_robot_turn()
+
+    skill_events = [event for event in events if event[0] == "skill"]
+    assert skill_events[0][1]["skill_row"] == 0
+    assert skill_events[0][1]["skill_col"] in range(4)
+    assert orchestrator.board.get(2, 0) == WHITE
+    assert sum(orchestrator.board.get(0, col) == EMPTY for col in range(4)) == 1
+    assert "not part of the immediate win threat" in caplog.text
 
 
 def test_play_robot_turn_ignores_skill_without_immediate_loss(
@@ -711,6 +770,17 @@ def test_openrouter_prompt_lists_occupied_coordinates() -> None:
     assert "下一手已经存在直接成五" in prompt
     assert "skill_row/skill_col" in prompt
     assert "垃圾话已开启" in prompt
+
+
+def test_openrouter_prompt_can_disable_skill() -> None:
+    board = np.zeros((9, 9), dtype=np.int8)
+
+    messages = llm_ai_module._messages(board, BLACK, "medium", skill_enabled=False)
+    prompt = messages[1]["content"]
+
+    assert "技能已关闭" in prompt
+    assert "use_skill 必须为 false" in prompt
+    assert "下一手已经存在直接成五" not in prompt
 
 
 def test_openrouter_decision_rejects_occupied_move() -> None:

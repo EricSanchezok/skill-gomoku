@@ -211,10 +211,10 @@ finally:
 python scripts/run_live_game.py
 ```
 
-真机默认是保守 bring-up 模式：最多跑 3 个 turn，并且每一次 SO101
-移动前都会打印最大关节变化摘要，等待人工按 Enter。确认完整路径、
-棋盒位置和棋盘位置都安全后，才考虑加 `--full-game` 或 `--max-turns N`。如果要
-关闭逐步确认，必须显式加 `--no-confirm-robot-moves`。
+真机默认最多跑 3 个 turn，并且不会在每一次 SO101 移动前等待人工审批。
+如果新场地需要逐段检查机械臂路径，显式加 `--confirm-robot-moves`；
+确认完整路径、棋盒位置和棋盘位置都安全后，再考虑加 `--full-game`
+或 `--max-turns N`。
 
 真机运行会强制检查当前机器人棋色对应的取子位。也就是说
 `robot.pickup_poses.black/white` 和 `robot.pickup_top_poses.black/white`
@@ -277,6 +277,9 @@ orchestrator.robot_say("我来想一下")
 orchestrator.robot_dance("win")
 orchestrator.robot_use_skill_gomoku({"phase": "midgame"})
 ```
+
+OpenRouter 对局默认允许“飞沙走石”技能；只有需要临场禁用时才加
+`--disable-skill`。
 
 气泵吸棋也已经接入 `execute_my_move()`。`run_live_game.py` 默认启用气泵，
 只有显式加 `--disable-air-pump` 才会关闭。默认配置：
@@ -343,7 +346,7 @@ conda run -n lerobot python scripts/record_pickup_poses.py --port /dev/ttyACM0
 - 真机完整对局如果启用 `max_relative_target`，保持取值保守。
 - 每次上力矩前先 hold 当前姿态，避免冲向旧目标。
 - 取子位没有录好时不要跑真机对局；`run_live_game.py` 会默认拒绝这种状态。
-- 新场地第一次跑保持逐步确认，不要加 `--no-confirm-robot-moves`。
+- 新场地第一次跑建议加 `--confirm-robot-moves` 做逐步确认。
 - 每个新 session 的第一步移动要慢，旁边有人看着电源和机械臂。
 - 手带标定后一般释放力矩，方便重新摆位。
 - raw register 级脚本只适合诊断具体电机问题，不建议在真实对局时运行。

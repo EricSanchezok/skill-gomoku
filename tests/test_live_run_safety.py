@@ -117,6 +117,25 @@ def test_live_config_rejects_missing_skill_pickup_pose_for_openrouter() -> None:
         )
 
 
+def test_live_config_allows_missing_skill_pickup_pose_when_skill_disabled() -> None:
+    live = _load_live_module()
+
+    live._validate_live_config_safety(
+        {
+            "robot": {
+                "waiting_pose": "waiting",
+                "pickup_poses": {"black": {"joint.pos": 1.0}, "white": None},
+                "pickup_top_poses": {"black": {"joint.pos": 2.0}, "white": None},
+            },
+            "game": {
+                "robot_stone": "black",
+                "ai": {"provider": "openrouter", "openrouter": {"skill_enabled": False}},
+            },
+        },
+        _args(),
+    )
+
+
 def test_live_config_rejects_missing_pickup_top_pose_before_hardware_startup() -> None:
     live = _load_live_module()
 
@@ -169,6 +188,18 @@ def test_live_run_waits_for_human_before_camera_sync_by_default() -> None:
     assert live._build_parser().parse_args(["--sync-after-robot"]).sync_after_robot is True
 
 
+def test_live_run_does_not_confirm_robot_moves_by_default() -> None:
+    live = _load_live_module()
+    parser = live._build_parser()
+
+    assert parser.parse_args([]).confirm_robot_moves is False
+    assert parser.parse_args(["--confirm-robot-moves"]).confirm_robot_moves is True
+    assert (
+        parser.parse_args(["--confirm-robot-moves", "--no-confirm-robot-moves"]).confirm_robot_moves
+        is False
+    )
+
+
 def test_live_run_enables_air_pump_by_default() -> None:
     live = _load_live_module()
     config = {"robot": {"air_pump": {"enabled": False}}, "game": {"ai": {}}}
@@ -187,6 +218,29 @@ def test_live_run_disable_air_pump_override_wins() -> None:
     live._apply_cli_overrides(config, args)
 
     assert config["robot"]["air_pump"]["enabled"] is False
+
+
+def test_live_run_enables_skill_by_default() -> None:
+    live = _load_live_module()
+    config = {
+        "robot": {"air_pump": {}},
+        "game": {"ai": {"openrouter": {"skill_enabled": False}}},
+    }
+    args = live._build_parser().parse_args([])
+
+    live._apply_cli_overrides(config, args)
+
+    assert config["game"]["ai"]["openrouter"]["skill_enabled"] is True
+
+
+def test_live_run_disable_skill_override_wins() -> None:
+    live = _load_live_module()
+    config = {"robot": {"air_pump": {}}, "game": {"ai": {"openrouter": {}}}}
+    args = live._build_parser().parse_args(["--disable-skill"])
+
+    live._apply_cli_overrides(config, args)
+
+    assert config["game"]["ai"]["openrouter"]["skill_enabled"] is False
 
 
 def test_live_run_trash_talk_override_updates_game_and_openrouter_config() -> None:
