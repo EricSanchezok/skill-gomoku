@@ -18,6 +18,7 @@ from src.interaction import (
     HumanTurnResult,
     KeyboardControlKeys,
     KeyboardHumanTurnController,
+    _speech_command,
 )
 from src.robot.pose_mapper import MeasuredBoardPoseMapper
 from src.utils.config_loader import load_config
@@ -472,6 +473,25 @@ def test_console_robot_interaction_speaks_with_system_voice(
     interaction.speak("落子")
 
     assert events == [("print", "[robot:speak] 落子"), ("voice", "落子")]
+
+
+def test_speech_command_keeps_macos_say_first(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("src.interaction.shutil.which", lambda cmd: f"/usr/bin/{cmd}")
+
+    command = _speech_command("中文测试")
+
+    assert command == ["/usr/bin/say", "中文测试"]
+
+
+def test_speech_command_uses_zh_voice_on_pi(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_which(cmd: str) -> str | None:
+        return "/usr/bin/espeak-ng" if cmd == "espeak-ng" else None
+
+    monkeypatch.setattr("src.interaction.shutil.which", fake_which)
+
+    command = _speech_command("中文测试")
+
+    assert command == ["/usr/bin/espeak-ng", "-v", "zh", "中文测试"]
 
 
 def test_play_robot_turn_uses_skill_only_for_immediate_loss(

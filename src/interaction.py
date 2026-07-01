@@ -205,9 +205,9 @@ def _speech_command(text: str) -> list[str] | None:
         return None
     candidates = (
         ("say", [text]),
-        ("spd-say", ["--wait", text]),
-        ("espeak-ng", [text]),
-        ("espeak", [text]),
+        ("espeak-ng", ["-v", "zh", text]),
+        ("espeak", ["-v", "zh", text]),
+        ("spd-say", ["--wait", "-l", "zh-CN", text]),
     )
     for executable, args in candidates:
         resolved = shutil.which(executable)
