@@ -494,6 +494,27 @@ def test_speech_command_uses_zh_voice_on_pi(monkeypatch: pytest.MonkeyPatch) -> 
     assert command == ["/usr/bin/espeak-ng", "-v", "zh", "中文测试"]
 
 
+def test_speech_command_finds_binary_next_to_conda_python(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_bin = tmp_path / "env" / "bin"
+    env_bin.mkdir(parents=True)
+    espeak = env_bin / "espeak-ng"
+    espeak.write_text("#!/bin/sh\n", encoding="utf-8")
+    espeak.chmod(0o755)
+    python = env_bin / "python"
+    python.write_text("#!/bin/sh\n", encoding="utf-8")
+
+    monkeypatch.setattr("src.interaction.shutil.which", lambda _cmd: None)
+    monkeypatch.setattr("src.interaction.sys.executable", str(python))
+    monkeypatch.delenv("CONDA_PREFIX", raising=False)
+
+    command = _speech_command("中文测试")
+
+    assert command == [str(espeak), "-v", "zh", "中文测试"]
+
+
 def test_play_robot_turn_uses_skill_only_for_immediate_loss(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

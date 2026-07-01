@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from typing import Any, Protocol
 
 from src.utils.constants import BLACK, WHITE
@@ -210,7 +213,24 @@ def _speech_command(text: str) -> list[str] | None:
         ("spd-say", ["--wait", "-l", "zh-CN", text]),
     )
     for executable, args in candidates:
-        resolved = shutil.which(executable)
+        resolved = _find_executable(executable)
         if resolved is not None:
             return [resolved, *args]
+    return None
+
+
+def _find_executable(name: str) -> str | None:
+    resolved = shutil.which(name)
+    if resolved is not None:
+        return resolved
+
+    search_dirs = [Path(sys.executable).resolve().parent]
+    conda_prefix = os.environ.get("CONDA_PREFIX")
+    if conda_prefix:
+        search_dirs.append(Path(conda_prefix) / "bin")
+
+    for directory in search_dirs:
+        candidate = directory / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
     return None
