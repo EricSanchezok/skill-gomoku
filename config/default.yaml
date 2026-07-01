@@ -6,16 +6,16 @@ board:
     method: manual
     corners:
       top_left:
-      - 848
-      - 146
+      - 849
+      - 148
       top_right:
       - 940
-      - 600
+      - 598
       bottom_right:
       - 226
-      - 577
+      - 576
       bottom_left:
-      - 376
+      - 378
       - 130
     dst_size: 600
 camera:
